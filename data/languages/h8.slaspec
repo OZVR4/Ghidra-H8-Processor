@@ -1,0 +1,77 @@
+define endian=big;
+
+define alignment=2;
+
+define space ram type=ram_space size=2 default;
+define space register type=register_space size=2;
+
+define register offset=0 size=2 [r0 r1 r2 r3 r4 r5 fp sp sr pc];
+
+define register offset=0x100 size=1 [cp dp ep tp br];
+
+# SR Flags
+@define T_FLAG   "sr[15,1]"
+@define I0_FLAG  "sr[8,1]"
+@define I1_FLAG  "sr[9,1]"
+@define I2_FLAG  "sr[10,1]"
+@define N_FLAG   "sr[3,1]"
+@define Z_FLAG   "sr[2,1]"
+@define V_FLAG   "sr[1,1]"
+@define C_FLAG   "sr[0,1]"
+
+
+
+# Immediate Data (Literal operation)
+
+
+
+define token instr32(32)
+	opcode1_32bit = (0,7)
+	address_24bit = (8,31)
+	address_16bit = (8,23)
+	opcode2_32bit = (24,31)
+;
+
+define token instr8(8)
+	opcode_byte = (0,7)
+;
+
+define token instr16(16)
+	opcode_word = (0,15)
+;
+
+
+
+#imm8: "#"k8	is k8										{ export *[const]:1 k8; }
+#imm16: "#"k16	is k16										{ export *[const]:2 k16; }
+
+
+#bit: "#"b3		is b3									{ export *[const]:1 b3; }
+
+
+
+
+:pjsr    @address_24bit  is opcode1_32bit =0x03 & address_24bit
+{
+    call [r0];
+}
+
+:prts   is opcode_word=0x1119
+{
+		return [r0];
+}
+
+:link  fp, #0:8   is opcode_word=0x1700
+{
+		r0 = r0;
+}
+
+:nop is opcode_byte=0x0 
+{
+	r0 = r0;
+}
+
+:unlk fp is opcode_byte=0x0f
+{
+	r0 = r0;
+}

@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <language_definitions>
-  <language processor="H8/539"
+  <language processor="H8"
             endian="big"
             size="16"
-            variant="default"
+            variant="H8/539"
             version="1.0"
             slafile="h8.sla"
             processorspec="h8.pspec"

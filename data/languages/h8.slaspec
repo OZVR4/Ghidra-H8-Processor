@@ -5,6 +5,9 @@ define alignment=2;
 define space ram type=ram_space size=2 default;
 define space register type=register_space size=2;
 
+
+define space address type=ram_space size=3;
+
 define register offset=0xf size=2 [r0 r1 r2 r3 r4 r5 fp sp sr pc];
 
 define register offset=0x100 size=1 [cp dp ep tp br];
@@ -21,22 +24,17 @@ define register offset=0x100 size=1 [cp dp ep tp br];
 
 
 
-# Immediate Data (Literal operation)
 
-
-
-define token instr32(32)
-	opcode1_32bit = (0,7)
-	address_24bit = (8,31)
-	address_16bit = (8,23)
-	opcode2_32bit = (24,31)
+define token instruction_1byte(8)
+	opcode_8=(0,7)
 ;
 
-define token instr8(8)
-	opcode_byte = (0,7)
-;
-
-define token instr16(16)
+define token instruction_2byte(16)
+	opcode_16=(0,3)
+	operand_size_16=(4,4)
+	imm8_16=(8,15)	
+	address_mode_16=(0,3)
+	register_16=(5,7)
 	opcode_wholeword = (0,15)
 	opcode_firstbyte = (0,7)
 	immediate_value_byte = (8,15)
@@ -45,13 +43,20 @@ define token instr16(16)
 	opcode_08_15 = (8,15)
 ;
 
+define token instruction_3byte(24)
+	opcode_24=(0,3)
+	operand_size_24=(4,4)
+	register_24=(5,7)
+	imm16_24=(16,23)
+;
 
+define token instruction_4byte(32)
+	opcode1_32bit = (0,7)
+	address_24bit = (8,31)
+	address_16bit = (8,23)
+	opcode2_32bit = (24,31)
+;
 
-#imm8: "#"k8	is k8										{ export *[const]:1 k8; }
-#imm16: "#"k16	is k16										{ export *[const]:2 k16; }
-
-
-#bit: "#"b3		is b3									{ export *[const]:1 b3; }
 
 macro push(val) {
 	*[register]:1 sp = val;
@@ -64,51 +69,90 @@ macro pop(val) {
 }
 
 
-attach variables [  register_05_07 ] [
- r0 r1 r2 r3 r4 r5 _ _
-];
+attach variables [  register_05_07 register_24 register_16 ] [ r0 r1 r2 r3 r4 r5 fp sp ];
 
-define pcodeop sleep;
 
-:sleep is opcode_byte=0b0011010 {
-	sleep();
+############### DATA #############
+:mov.i.w imm16_24,register_24             is opcode_24=0b0101 & operand_size_24=1 & register_24 & imm16_24
+{
+	register_24 = imm16_24;
 }
 
+:mov.e.b imm8_16,register_16             is opcode_16=0b0101 & operand_size_16=0 & register_16 & imm8_16
+{
+	register_16 = imm8_16;
+}
+
+
+
+##################### BRANCH ####################
 :pjsr    @address_24bit  is opcode1_32bit=0x03 & address_24bit
 {
-    call [r0];
+
+	push(pc);
+	pc = &address_24bit;
+	call  [pc];
 }
+
 
 :jsr    @address_24bit  is opcode1_32bit=0x01 & address_24bit
 {
-    call [r0];
+   	push(pc);
+	pc = &address_24bit;
+	call  [pc];
 }
+
 
 :prts   is opcode_wholeword=0x1119
 {
 
-		return [r0];
+	pop(pc);
+	return [pc];
 }
+
+
+##################### SYSTEM CONTROL ####################
+define pcodeop nop;
+:nop is opcode_8=0x0 
+{
+	nop();
+}
+
+
+define pcodeop sleep;
+:sleep is opcode_8=0b0011010 {
+	sleep();
+}
+
 
 :link  is opcode_firstbyte=0x17 & immediate_value_byte
 {
 		r0 = r0;
 }
 
-:nop is opcode_byte=0x0 
-{
-	r0 = r0;
-}
 
-
-:extu is opcode_00_04=0b10100 & register_05_07 & opcode_08_15=0b00010010
-{
-		register_05_07 = 0;
-}
-
-:unlk is opcode_byte=0x0f
+:unlk is opcode_8=0x0f
 {
 	sp = fp;
 	pop(sp);
-	
+}
+
+
+##################### ARITHMETIC OPERATIONS ####################
+:extu.b is opcode_00_04=0b10100 & register_05_07 & opcode_08_15=0b00010010
+{
+		register_05_07 = register_05_07 ^ 0xFF ;
+}
+
+
+:cmp.i.w imm16_24,register_24             is opcode_24=0b0100 & operand_size_24=1 & register_24 & imm16_24
+{
+	#TODO
+	register_24 = imm16_24;
+}
+
+:cmp.e.b imm8_16,register_16             is opcode_16=0b0100 & operand_size_16=0 & register_16 & imm8_16
+{
+	#TODO
+	register_16 = imm8_16;
 }

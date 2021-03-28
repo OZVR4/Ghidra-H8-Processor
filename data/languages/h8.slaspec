@@ -5,7 +5,7 @@ define alignment=2;
 define space ram type=ram_space size=2 default;
 define space register type=register_space size=2;
 
-define register offset=0 size=2 [r0 r1 r2 r3 r4 r5 fp sp sr pc];
+define register offset=0xf size=2 [r0 r1 r2 r3 r4 r5 fp sp sr pc];
 
 define register offset=0x100 size=1 [cp dp ep tp br];
 
@@ -37,7 +37,12 @@ define token instr8(8)
 ;
 
 define token instr16(16)
-	opcode_word = (0,15)
+	opcode_wholeword = (0,15)
+	opcode_firstbyte = (0,7)
+	immediate_value_byte = (8,15)
+	opcode_00_04 = (0,4)
+	register_05_07 = (5,7)
+	opcode_08_15 = (8,15)
 ;
 
 
@@ -48,20 +53,44 @@ define token instr16(16)
 
 #bit: "#"b3		is b3									{ export *[const]:1 b3; }
 
+macro push(val) {
+	*[register]:1 sp = val;
+	sp = sp-2;
+}
+	
+macro pop(val) {
+	sp = sp + 2;
+	val = *[register]:1 sp;
+}
 
 
+attach variables [  register_05_07 ] [
+ r0 r1 r2 r3 r4 r5 _ _
+];
 
-:pjsr    @address_24bit  is opcode1_32bit =0x03 & address_24bit
+define pcodeop sleep;
+
+:sleep is opcode_byte=0b0011010 {
+	sleep();
+}
+
+:pjsr    @address_24bit  is opcode1_32bit=0x03 & address_24bit
 {
     call [r0];
 }
 
-:prts   is opcode_word=0x1119
+:jsr    @address_24bit  is opcode1_32bit=0x01 & address_24bit
 {
+    call [r0];
+}
+
+:prts   is opcode_wholeword=0x1119
+{
+
 		return [r0];
 }
 
-:link  fp, #0:8   is opcode_word=0x1700
+:link  is opcode_firstbyte=0x17 & immediate_value_byte
 {
 		r0 = r0;
 }
@@ -71,7 +100,15 @@ define token instr16(16)
 	r0 = r0;
 }
 
-:unlk fp is opcode_byte=0x0f
+
+:extu is opcode_00_04=0b10100 & register_05_07 & opcode_08_15=0b00010010
 {
-	r0 = r0;
+		register_05_07 = 0;
+}
+
+:unlk is opcode_byte=0x0f
+{
+	sp = fp;
+	pop(sp);
+	
 }

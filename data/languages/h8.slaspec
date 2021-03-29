@@ -59,13 +59,13 @@ define token instruction_4byte(32)
 
 
 macro push(val) {
-	*[register]:1 sp = val;
+	*[register]:2 sp = val;
 	sp = sp-2;
 }
 	
 macro pop(val) {
-	sp = sp + 2;
-	val = *[register]:1 sp;
+	sp = sp+2;
+	val = *[register]:2 sp;
 }
 
 
@@ -91,7 +91,7 @@ attach variables [  register_05_07 register_24 register_16 ] [ r0 r1 r2 r3 r4 r5
 
 	push(pc);
 	pc = &address_24bit;
-	call  [pc];
+	call  [address_24bit:3];
 }
 
 
@@ -99,15 +99,22 @@ attach variables [  register_05_07 register_24 register_16 ] [ r0 r1 r2 r3 r4 r5
 {
    	push(pc);
 	pc = &address_24bit;
-	call  [pc];
+	call  [address_24bit:3];
 }
 
 
 :prts   is opcode_wholeword=0x1119
 {
-
 	pop(pc);
 	return [pc];
+}
+
+
+##################### LOGICAL OPERATIONS ####################
+:and.w RdFull,RrFull               is  {
+	RdFull = RdFull & RrFull;
+	$(Vflag) = 0;
+	setResultFlags(RdFull);
 }
 
 

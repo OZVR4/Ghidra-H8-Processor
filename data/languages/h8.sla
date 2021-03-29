@@ -117,7 +117,7 @@
 <varnode_tpl><const_tpl type="spaceid" name="const"/><const_tpl type="handle" val="0" s="offset"/><const_tpl type="real" val="0x2"/></varnode_tpl>
 </op_tpl>
 <op_tpl code="CALLIND"><null/>
-<varnode_tpl><const_tpl type="spaceid" name="register"/><const_tpl type="real" val="0x21"/><const_tpl type="real" val="0x2"/></varnode_tpl>
+<varnode_tpl><const_tpl type="handle" val="0" s="space"/><const_tpl type="handle" val="0" s="offset"/><const_tpl type="real" val="0x3"/></varnode_tpl>
 </op_tpl>
 </construct_tpl>
 </constructor>
@@ -141,7 +141,7 @@
 <varnode_tpl><const_tpl type="spaceid" name="const"/><const_tpl type="handle" val="0" s="offset"/><const_tpl type="real" val="0x2"/></varnode_tpl>
 </op_tpl>
 <op_tpl code="CALLIND"><null/>
-<varnode_tpl><const_tpl type="spaceid" name="register"/><const_tpl type="real" val="0x21"/><const_tpl type="real" val="0x2"/></varnode_tpl>
+<varnode_tpl><const_tpl type="handle" val="0" s="space"/><const_tpl type="handle" val="0" s="offset"/><const_tpl type="real" val="0x3"/></varnode_tpl>
 </op_tpl>
 </construct_tpl>
 </constructor>
@@ -161,7 +161,7 @@
 </op_tpl>
 </construct_tpl>
 </constructor>
-<constructor parent="0x0" first="1" length="1" line="116">
+<constructor parent="0x0" first="1" length="1" line="115">
 <print piece="nop"/>
 <construct_tpl>
 <null/><op_tpl code="CALLOTHER"><null/>
@@ -169,7 +169,7 @@
 </op_tpl>
 </construct_tpl>
 </constructor>
-<constructor parent="0x0" first="1" length="1" line="123">
+<constructor parent="0x0" first="1" length="1" line="122">
 <print piece="sleep"/>
 <construct_tpl>
 <null/><op_tpl code="CALLOTHER"><null/>
@@ -177,7 +177,7 @@
 </op_tpl>
 </construct_tpl>
 </constructor>
-<constructor parent="0x0" first="1" length="2" line="128">
+<constructor parent="0x0" first="1" length="2" line="127">
 <oper id="0x2e"/>
 <print piece="link"/>
 <construct_tpl>
@@ -186,7 +186,7 @@
 </op_tpl>
 </construct_tpl>
 </constructor>
-<constructor parent="0x0" first="1" length="1" line="134">
+<constructor parent="0x0" first="1" length="1" line="133">
 <print piece="unlk"/>
 <construct_tpl>
 <null/><op_tpl code="COPY"><varnode_tpl><const_tpl type="spaceid" name="register"/><const_tpl type="real" val="0x1d"/><const_tpl type="real" val="0x2"/></varnode_tpl>
@@ -202,7 +202,7 @@
 </op_tpl>
 </construct_tpl>
 </constructor>
-<constructor parent="0x0" first="1" length="2" line="142">
+<constructor parent="0x0" first="1" length="2" line="141">
 <oper id="0x2f"/>
 <print piece="extu.b"/>
 <construct_tpl>
@@ -212,7 +212,7 @@
 </op_tpl>
 </construct_tpl>
 </constructor>
-<constructor parent="0x0" first="1" length="3" line="148">
+<constructor parent="0x0" first="1" length="3" line="147">
 <oper id="0x31"/>
 <oper id="0x30"/>
 <print piece="cmp.i.w"/>
@@ -226,7 +226,7 @@
 </op_tpl>
 </construct_tpl>
 </constructor>
-<constructor parent="0x0" first="1" length="2" line="154">
+<constructor parent="0x0" first="1" length="2" line="153">
 <oper id="0x33"/>
 <oper id="0x32"/>
 <print piece="cmp.e.b"/>

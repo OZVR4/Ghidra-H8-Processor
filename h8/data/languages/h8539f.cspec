@@ -257,54 +257,6 @@
     </unaffected>
   </prototype>
 
-  <!-- ADDED 2026-09-15 (review-9561-merge-ordering.md Findings 9/10): a genuinely
-       far-called (pjsr/prts) variant of __stdcall_far_allstack_32ret. PJSR's own
-       documented operation (H8_539F_hardware.md: "PC -> @-SP, CP -> @-SP, <EA> ->
-       PC") pushes an EXTRA 2-byte CP word beyond a near call's plain 2-byte PC.
-       After the callee's own LINK FP,#0 adds a third word (old FP), a far-called
-       function's real stack layout is FP+0=old FP, FP+2=CP, FP+4=PC, FP+6=first
-       real argument, confirmed directly against multiple functions' own
-       disassembly (sat_add_s16, muldiv_u16_scaled, muldiv_s16_rounded_3op,
-       div_u32_u16_rounded, select_min_xy_triple all read their first real stack
-       parameter at FP+6, never FP+4) AND against a real call site
-       (f2ea_f2ee_composite_correction_calc @0x248e1: "pjsr @0x141dc:24" directly
-       targeting muldiv_u16_scaled's entry, confirming these functions are
-       genuinely far-called, not merely near functions with a numbering quirk).
-       extrapop=6 (not 4) and pentry offset=6 (not 4) reflect this correctly.
-       Added as a NEW prototype rather than editing __stdcall_far_allstack_32ret
-       in place: per this same document's Finding 4 experiment and the
-       2026-07-22 comment history elsewhere in this file, in-place edits to
-       widely-shared prototypes in this .cspec have repeatedly caused broad,
-       hard-to-predict regressions across unrelated functions. Apply this
-       prototype only to functions confirmed far-called (check real call sites
-       for a "pjsr" instruction targeting the function, as done for
-       muldiv_u16_scaled; do not assume by name/shape alone). -->
-  <prototype name="__stdcall_far_allstack_32ret_farcall" extrapop="6" stackshift="0">
-    <input>
-      <pentry minsize="1" maxsize="512" align="2">
-        <addr offset="6" space="stack"/>
-      </pentry>
-    </input>
-    <output>
-      <pentry minsize="1" maxsize="2">
-        <register name="R0"/>
-      </pentry>
-    </output>
-    <killedbycall>
-      <register name="R0"/>
-      <register name="R1"/>
-      <register name="R2"/>
-    </killedbycall>
-    <unaffected>
-      <register name="R3"/>
-      <register name="R4"/>
-      <register name="R5"/>
-      <register name="FP"/>
-      <register name="SP"/>
-      <register name="SP24"/>
-    </unaffected>
-  </prototype>
-
   <prototype name="__stdcall_far_allstack" extrapop="4" stackshift="0">
     <input>
       <pentry minsize="1" maxsize="512" align="2">
@@ -322,46 +274,6 @@
       <register name="R2"/>
     </killedbycall>
     <unaffected>
-      <register name="R3"/>
-      <register name="R4"/>
-      <register name="R5"/>
-      <register name="FP"/>
-      <register name="SP"/>
-      <register name="SP24"/>
-    </unaffected>
-  </prototype>
-
-  <!-- EXPERIMENTAL 2026-09-14: scratch clone of __stdcall_far_allstack with R1
-       removed from killedbycall, added to test the review-9561-merge-ordering.md
-       Finding 3/correction hypothesis that R1's killedbycall declaration (not a
-       spacebase-tracking defect) is what produces the spurious R1 INDIRECT/
-       "uVar4 = b" bug in muldiv_u16. muldiv_u16 has NO call instruction at all,
-       so if this hypothesis is right, retargeting muldiv_u16 alone to this
-       prototype should make the bug disappear even though nothing else about
-       the function's real ABI has changed. Deliberately added as a NEW named
-       prototype rather than edited in place, so no other function (all of which
-       currently use the real __stdcall_far_allstack above) is affected. Do not
-       leave this in the tree if the experiment is inconclusive or negative;
-       remove it. If positive, it still needs the same full-ROM before/after
-       diff discipline as the 2026-07-22 killedbycall change before being
-       considered for the real prototype. -->
-  <prototype name="__stdcall_far_allstack_noR1kill" extrapop="4" stackshift="0">
-    <input>
-      <pentry minsize="1" maxsize="512" align="2">
-        <addr offset="4" space="stack"/>
-      </pentry>
-    </input>
-    <output>
-      <pentry minsize="1" maxsize="2">
-        <register name="R0"/>
-      </pentry>
-    </output>
-    <killedbycall>
-      <register name="R0"/>
-      <register name="R2"/>
-    </killedbycall>
-    <unaffected>
-      <register name="R1"/>
       <register name="R3"/>
       <register name="R4"/>
       <register name="R5"/>

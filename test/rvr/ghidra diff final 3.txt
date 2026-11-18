@@ -1,0 +1,41 @@
+File 2 (...final3.hex-2.c) is the cleaner/better Ghidra export overall, mainly because it removes a badly reconstructed function and its misleading switch analysis. File 1 (...final2.hex.c) retains that function, including explicit “bad instruction data” and unreachable-block warnings.
+
+Headline differences
+Metric	final2.hex.c (File 1)	final3.hex-2.c (File 2)	Read
+Lines	29,444	29,311	File 2 is slightly smaller. 
+Functions	641	640	File 2 omits one function. 
+switch reconstructions	2	0	File 2 avoids two questionable switch reconstructions. 
+undefined* variables	2,781	2,835	File 1 is marginally cleaner here. 
+Pointer casts	3,519	3,670	File 1 is marginally cleaner here. 
+unaff_* registers	96	84	File 2 has fewer unresolved register artifacts. 
+Unique functions	Has sci1_post_handshake_status_broadcast_dispatch	Does not	This is the decisive difference. 
+Why File 2 is better
+The major improvement is that File 2 drops sci1_post_handshake_status_broadcast_dispatch, which File 1 decompiled with:
+
+WARNING: Control flow encountered bad instruction data
+
+WARNING: Removing unreachable block
+
+a reconstructed indexed switch that the file’s own annotation says is wrong
+
+several unaff_R3, unaff_R5, and unaff_FP artifacts
+
+The removed function’s comments explicitly say to ignore its decompiled body and trust the raw disassembly at the eight jump-table targets instead. Removing that unreliable pseudo-C makes File 2 less likely to mislead someone reading or patching the MUT-II handshake state machine.
+
+File 2 also has fewer unaff_* variables, which usually means Ghidra recovered register flow a little more successfully.
+
+Where File 1 is better
+File 1 is not uniformly worse:
+
+It has 54 fewer undefined-typed variables.
+
+It has 151 fewer pointer casts.
+
+It preserves the documented analysis of the handshake broadcast state machine, including the interpretation of the C0 55 EF 85 sequence and the per-jump-table-target breakdown.
+
+So if your goal is research notes and protocol reconstruction, File 1 contains valuable manually added context that File 2 loses. If your goal is the cleanest decompiler output to read, diff, or use as a patch base, File 2 wins.
+
+Practical recommendation
+Use File 2 as the primary decompilation baseline, but carry over the removed function’s comment block from File 1 as documentation—or better, replace the bogus decompiled function with a manually written stub/comment referencing the verified raw-disassembly targets. That gives you File 2’s cleanliness without losing File 1’s protocol findings.
+
+The only other meaningful function-signature change is minor: sci1_boot_ihex_colon_record_decode_dispatch’s second parameter is undefined2 in File 1 but short in File 2; neither is inherently more correct without checking the caller and H8 register/stack convention.

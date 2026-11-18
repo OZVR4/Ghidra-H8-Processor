@@ -1,0 +1,913 @@
+<rom>
+	<romid>
+		<xmlid>RVRbase</xmlid>
+		<flashmethod>mitsukernel</flashmethod>
+		<memmodel>H8539F</memmodel>
+	</romid>
+
+	<notes>
+	      2012/11/19 [Tactrix] updated to include missing elements.
+	      2024 [Analysis] Extended with additional verified tables from ROM analysis.
+	      2025 [Ghidra H8/539F RE] Added TCU/Transmission category from decompilation of
+	        tcu_shift_torque_mgmt @ 0x28fff and isr_sci3_eri @ 0x168e3.
+	      2026-07 [Ghidra RE, session 10] STRUCTURAL FIX: tcu_shift_torque_mgmt was
+	        discovered to have been mis-split by Ghidra's auto-analyzer into 4 separate
+	        functions (a 2-byte inline data literal at ROM 0x29339-0x2933a, mistaken
+	        for code, broke the boundary). It is genuinely ONE function spanning ROM
+	        0x28fff-0x29c31, now renamed tcu_shift_torque_and_knock_mgmt, and it does
+	        BOTH TCU shift torque coordination AND per-cylinder knock processing (the
+	        latter previously mislabeled as an independent "knock_process_main" with
+	        no findable caller). Fixing the boundary immediately surfaced the real
+	        caller: isr_sci3_eri (COMPUTED_CALL @ ROM 0x169b1), matching this file's
+	        pre-existing note above almost exactly. This also revises the session-3
+	        "two independently-gated subsystems intentionally coordinating via shared
+	        f3ac/f3ae" framing to "one function doing both jobs sequentially" - the
+	        underlying RAM-register findings (f1f2 bit7 gate, EEC6/EEC8 octane chain,
+	        etc.) remain valid, only the two-functions framing changes. Also confirmed
+	        this session: the "TCU Shift Torque Cmd Lo/Hi - Per Gear" tables (below)
+	        hold raw SCI3 protocol command bytes sent to the TCU, never used in any
+	        arithmetic - their existing uint16 "units" scaling is correct as-is; small
+	        values (1-2) are expected, not a data error. See logging.txt session 10.
+	      Address mapping: XML address = file_offset + 0x10000
+	      Axis RAM pointers: F0C0=RPM, F0C2=Load/MAP, F0C4=CoolantTempA(ADC),
+	        F0C6=AirTemp(ADC), F0C8=CoolantTempB(ADC), F0CA=TimeAfterStart,
+	        F0CE=ISCVDemand, F0D0=IAT_raw
+	      TCU comms: SCI3 serial channel. ECU sends torque cut commands to TCU each crank pulse.
+	        tcu_comms_state (RAM 0xf3d0): 0=idle, 1=rx_wait, 2=tx_active
+	        tcu_shift_flags (RAM 0xf3cc): bit0=shift_in_progress, bit1=shift_done,
+	          bit2=downshift, bit3=upshift, bit5=sport_mode, bit6=torque_cut_suppressed
+	      NOTE on throttle_load_pct (RAM 0xf5de): this is computed as crank period delta
+	        (T2GR1H - crank_angle_current) in isr_sci3_eri, NOT a TPS voltage reading.
+	        It represents engine load derived from crank timing, not pedal position.
+	      2026-07 [Ghidra RE, session 4] CONFIRMED: this ECU has no discrete "knock
+	        retard degrees" value (same as Evo 4/5/6 - neither MUT profile exposes one).
+	        Knock instead degrades Octane Level (MUT 0x27, RAM 0xEEC8/EEC9, starts at
+	        0xFF=100%) via an intermediate hysteresis counter at RAM 0xEEC6, driven by
+	        the knock-sum register (0xF3A2/F3A3). Full confirmed chain:
+	          knock_process_main (0x2933b) -> writes knock sum F3A2/F3A3
+	          -> knock_event_counter_update_eec6 (0x251c4): hysteresis vs ROM
+	             thresholds 0xB3E/0xB40, drives EEC6 0-255 (up when clean, down
+	             under sustained knock)
+	          -> octane_level_compute_from_knock_counter (0x252d3): clamps/scales
+	             EEC6, writes result to EEC8 = Octane Level
+	        Octane Level is what blends between the High/Low-Octane Ignition Maps
+	        and Knock Control/Octane Control Above Load tables already defined below -
+	        the "retard" is implicit in that map blend, not a standalone logged
+	        scalar. A second, independent writer (octane_level_init_or_force_from_
+	        gear_table, 0x24e80) also sets EEC6/EEC8 from a per-gear ROM table at
+	        0x2882 indexed by the current-gear-state variable f1fc, or forces 100%
+	        under a separate condition flag (f0fe bit0) - gear-dependent
+	        init/override, independent of the knock decay path. Both writers are
+	        gated by RAM 0xf1f2 bit7 (same enable bit used for knock-to-TCU torque
+	        coordination, see TCU comms note above and logging.txt session 3/4).
+	        See logging.txt for full addresses, thresholds, and remaining open
+	        threads (undecoded flag bits f1fe.3/f200.0/f0fe.0, ROM table 0x2882 not
+	        yet cross-checked against the f1f0/f1f2/f1f4 per-gear config stride).
+	      2026-08-13 [Claude]: removed 96 top-level table entries from this shared base
+	        that duplicated (often with stale/pre-correction addresses) tables already
+	        defined, hand-verified, and corrected in 21000011_1997-2001_RVR_X3_Mt__4g63t_.xml
+	        (the only file that includes this base). Confirmed via full name-by-name
+	        diff of both files' top-level table-name entries that every removed
+	        name has a live, more-current definition in that ROM-specific file. Kept:
+	        all scaling definitions (still relied on by both files), the SCALING_TABLE_*
+	        holding-pen block (not part of the duplicate set), the Post Start Enrich Decay
+	        Multiplier / Launch Control Speed Limit
+	        tables (present here only, no ROM-specific override exists), and the TCU/MUT
+	        sections (present here only). See RVRbase.xml history for the removed tables'
+	        prior content if needed for reference.
+	</notes>
+
+	<!-- ===== SCALING DEFINITIONS ===== -->
+	<scaling name="TCUDuty" units="%" toexpr="x*100/255" frexpr="x*255/100" format="%.1f" min="0" max="100" inc="0.5" storagetype="uint8" endian="big"/>
+	<scaling name="TCUTorque" units="Nm" toexpr="x*0.5" frexpr="x/0.5" format="%.1f" min="0" max="500" inc="0.5" storagetype="uint16" endian="big"/>
+	<scaling name="AFR" units="AFR" toexpr="14.7*128/x" frexpr="14.7*128/x" format="%.1f" min="8" max="20" inc="0.1" storagetype="uint8" endian="big"/>
+	<scaling name="AirFlow16" units="g/s" toexpr="x*600/65536" frexpr="x*65536/600" format="%.1f" min="0" max="600" inc="1" storagetype="uint16" endian="big"/>
+	<scaling name="AirFlow8" units="g/s" toexpr="x*321/256" frexpr="x*256/321" format="%.1f" min="0" max="321" inc="1" storagetype="uint8" endian="big"/>
+	<scaling name="Airflow Hz" units="Hz" toexpr="x/6.25" frexpr="x*6.25" format="%.0f" min="0" max="65535" inc="1" storagetype="uint16" endian="big"/>
+	<scaling name="ASCII" storagetype="bloblist" storagebits="8">
+		<data name="0" value="30"/>
+		<data name="1" value="31"/>
+		<data name="2" value="32"/>
+		<data name="3" value="33"/>
+		<data name="4" value="34"/>
+		<data name="5" value="35"/>
+		<data name="6" value="36"/>
+		<data name="7" value="37"/>
+		<data name="8" value="38"/>
+		<data name="9" value="39"/>
+		<data name="A" value="41"/>
+		<data name="B" value="42"/>
+		<data name="C" value="43"/>
+		<data name="D" value="44"/>
+		<data name="E" value="45"/>
+		<data name="F" value="46"/>
+		<data name="G" value="47"/>
+		<data name="H" value="48"/>
+		<data name="I" value="49"/>
+		<data name="J" value="4A"/>
+		<data name="K" value="4B"/>
+		<data name="L" value="4C"/>
+		<data name="M" value="4D"/>
+		<data name="N" value="4E"/>
+		<data name="O" value="4F"/>
+		<data name="P" value="50"/>
+		<data name="Q" value="51"/>
+		<data name="R" value="52"/>
+		<data name="S" value="53"/>
+		<data name="T" value="54"/>
+		<data name="U" value="55"/>
+		<data name="V" value="56"/>
+		<data name="W" value="57"/>
+		<data name="X" value="58"/>
+		<data name="Y" value="59"/>
+		<data name="Z" value="5A"/>
+		<data name="_" value="FF"/>
+	</scaling>
+	<scaling name="Atmospheric Pressure" units="units" toexpr="x" frexpr="x" format="%.2f" min="0" max="255" inc="1" storagetype="uint16" endian="big"/>
+	<scaling name="BAUDRATE" units="units" toexpr="500000/(x+1)" frexpr="500000/x-1" format="%.0d" min="0" max="500000" inc="1" storagetype="uint8" endian="big"/>
+	<scaling name="BatteryVoltage" units="V" toexpr="x*75/1024" frexpr="x*1024/75" format="%.2f" min="0" max="18.75" inc="0.5" storagetype="uint16" endian="big"/>
+	<scaling name="BoostBar" units="bar" toexpr="x/93.7" frexpr="x*93.7" format="%.2f" min="0" max="2.7" inc="0.05" storagetype="uint8" endian="big"/>
+	<scaling name="BoostBar16" units="bar" toexpr="x/1372.2" frexpr="x*1372.2" format="%.2f" min="0" max="2.7" inc="0.05" storagetype="uint16" endian="big"/>
+	<scaling name="BoostError" units="%" toexpr="x*5/32-20" frexpr="(x+20)*32/5" format="%.1f" min="-20" max="20" inc="0.5" storagetype="uint16" endian="big"/>
+	<scaling name="CaseAlphaNumeric" storagetype="bloblist" storagebits="8">
+		<data name="MB" value="10"/>
+		<data name="MD" value="20"/>
+		<data name="MR" value="30"/>
+		<data name="MN" value="60"/>
+		<data name="1860" value="80"/>
+	</scaling>
+	<scaling name="DynamicBoost" units="%" toexpr="(x-128)/2" frexpr="x*2+128" format="%.1f" min="-64" max="63.5" inc="0.5" storagetype="uint8" endian="big"/>
+	<scaling name="ECUTime" units="ms" toexpr="1000*x/102" frexpr="102*x/1000" format="%.0f" min="0" max="100000" inc="1" storagetype="uint16" endian="big"/>
+	<scaling name="Enrich" units="deg" toexpr="x-128" frexpr="x+128" format="%.0f" min="-128" max="128" inc="1" storagetype="uint8" endian="big"/>
+	<scaling name="EnrichmentAdj" units="%" toexpr="x/128" frexpr="x*128" format="%.2f" min="0" max="2" inc="0.05" storagetype="uint8" endian="big"/>
+	<scaling name="Hex16" units="hex" toexpr="x" frexpr="x" format="%04X" min="0" max="65535" inc="1" storagetype="uint16" endian="big"/>
+	<scaling name="Hex8" units="hex" toexpr="x" frexpr="x" format="%02X" min="0" max="255" inc="1" storagetype="uint8" endian="big"/>
+	<scaling name="ISCVSteps" units="Steps" toexpr="x" frexpr="x" format="%.0f" min="0" max="255" inc="1" storagetype="uint8" endian="big"/>
+	<scaling name="ISCVSteps16" units="Steps" toexpr="x" frexpr="x" format="%.0f" min="0" max="255" inc="1" storagetype="uint16" endian="big"/>
+	<scaling name="ISCV_AX2_8" units="% Demand" toexpr="x*100/255" frexpr="x*255/100" format="%.1f" min="0" max="200" inc="0.5" storagetype="uint8" endian="big"/>
+	<scaling name="ISCV_AX2_16" units="% Demand" toexpr="x*100/255" frexpr="x*255/100" format="%.1f" min="0" max="200" inc="0.5" storagetype="uint16" endian="big"/>
+	<scaling name="Injector scale + 10%" units="CC/min" toexpr="30240/x" frexpr="30240/x" format="%.0f" min="1" max="1000" inc="10" storagetype="uint16" endian="big"/>
+	<scaling name="InjectorLatency" units="ms" toexpr="x*0.024" frexpr="x/0.024" format="%.3f" min="0" max="4" inc="1" storagetype="uint8" endian="big"/>
+	<scaling name="InjectorScaling" units="cc/min" toexpr="29241/x" frexpr="29241/x" format="%.0f" min="1" max="1000" inc="10" storagetype="uint16" endian="big"/>
+	<scaling name="L/Hz" units="L/Hz" toexpr="x*.0007" frexpr="x/.0007" format="%.4f" min="0" max="800" inc="0.0001" storagetype="uint8" endian="big"/>
+	<scaling name="Load" units="%" toexpr="x*10/32" frexpr="x*32/10" format="%.0f" min="0" max="300" inc="1" storagetype="uint16" endian="big"/>
+	<scaling name="Load16" units="units" toexpr="x*5/8" frexpr="x*8/5" format="%.1f" min="0" max="100" inc="1" storagetype="uint16" endian="big"/>
+	<scaling name="Load8" units="%" toexpr="x*5/8" frexpr="x*8/5" format="%.1f" min="0" max="160" inc="1" storagetype="uint8" endian="big"/>
+	<!-- 2026-08-14 [Ghidra] New scaling, TCU-specific. RVR is the only platform in this project
+	     with TCU code, so this axis had no in-project precedent to match against existing
+	     Load/Load16/Load8 scalings (all of which overshoot 100% on this axis's raw data).
+	     Derived from TABLE_3D_000131FA_TCU's Axis2 (header 2d650, data 64,96,...,512):
+	     x*100/512 gives a clean proportional 12.5,18.75,25,31.25,37.5,50,62.5,75,87.5,100%,
+	     ending exactly at 100. Cross-checked 2026-08-14 against a real VR4 5-AT TCU ROM's
+	     own "vr4_AT_base.xml" (external file, user-provided): its shift-point tables pair
+	     VehicleSpeedAT with a Throttle Position axis using "Throttle%16" (x*100/255, 8-bit
+	     domain, max raw 255), NOT a Load-style scaling - confirming the second axis on TCU
+	     shift/pressure tables is throttle%, not engine Load, contrary to the Fuel-side f0c2
+	     convention. This RVR axis's raw domain tops out at 512 (16-bit) rather than 255
+	     (8-bit), so x*100/512 is the correctly-scaled equivalent for this table's storage
+	     width. Renamed accordingly - see table comment below. -->
+	<scaling name="TCULoad" units="%" toexpr="x*100/512" frexpr="x*512/100" format="%.2f" min="0" max="100" inc="1" storagetype="uint16" endian="big"/>
+	<scaling name="LoadBoost" units="%" toexpr="x*5/4" frexpr="x*4/5" format="%.0f" min="0" max="319" inc="1" storagetype="uint8" endian="big"/>
+	<scaling name="MAFsize" units="units" toexpr="39044/x" frexpr="39044/x" format="%.0f" min="1000" max="5000" inc="1" storagetype="int16" endian="big"/>
+	<scaling name="Percent (128)" units="%" toexpr="x/1.28" frexpr="x*1.28" format="%.0f" min="0" max="100" inc="1" storagetype="uint8" endian="big"/>
+	<scaling name="Percent (256)" units="Trim %" toexpr="x/2.55" frexpr="x*2.55" format="%.0f" min="0" max="100" inc="0.39" storagetype="uint8" endian="big"/>
+	<scaling name="RPM" units="RPM" toexpr="x*1000/256" frexpr="x*256/1000" format="%.0f" min="0" max="11000" inc="50" storagetype="uint16" endian="big"/>
+	<scaling name="RPM8" units="RPM" toexpr="x*125/16" frexpr="x*16/125" format="%.0f" min="0" max="2000" inc="50" storagetype="uint8" endian="big"/>
+	<scaling name="RPMLimit" units="RPM" toexpr="7500000/x" frexpr="7500000/x" format="%.0f" min="0" max="9000" inc="60" storagetype="uint16" endian="big"/>
+	<scaling name="RPMPerMPH" units="RPM/MPH" toexpr="x/22.6" frexpr="22.6*x" format="%.0f" min="0" max="3000" inc="5" storagetype="uint16" endian="big"/>
+	<scaling name="RPMStatLimit" units="RPM" toexpr="x*31.25" frexpr="x/31.25" format="%.0f" min="0" max="9000" inc="31.25" storagetype="uint16" endian="big"/>
+	<scaling name="RPMTarget" units="RPM" toexpr="x*125/16" frexpr="x*16/125" format="%.0f" min="0" max="2000" inc="50" storagetype="uint16" endian="big"/>
+	<scaling name="RPMstatbyte" units="units" toexpr="x*31.25" frexpr="x/31.25" format="%.0f" min="0" max="11000" inc="1" storagetype="uint8" endian="big"/>
+	<scaling name="Temp" units="Celsius" toexpr="x-40" frexpr="x+40" format="%.0f" min="-40" max="215" inc="1" storagetype="uint16" endian="big"/>
+	<scaling name="ThrottlePercentage" units="%" toexpr="x/255*100" frexpr="x*255/100" format="%.0f" min="0" max="100" inc="1" storagetype="uint16"/>
+	<scaling name="ThrottleVoltage" units="V" toexpr="x*5/256" frexpr="x*256/5" format="%.2f" min="0" max="5" inc="0.05" storagetype="uint8" endian="big"/>
+	<scaling name="Time" units="ms" toexpr="x*25" frexpr="x/25" format="%.0f" min="0" max="1638350" inc="25" storagetype="uint16" endian="big"/>
+	<scaling name="TimeSec" units="s" toexpr="x/10" frexpr="x*10" format="%.1f" min="0" max="25.5" inc="0.1" storagetype="uint16" endian="big"/>
+	<scaling name="Timesecbyte" units="s" toexpr="x/10" frexpr="x*10" format="%.1f" min="0" max="25.5" inc="1" storagetype="uint8" endian="big"/>
+	<scaling name="Timing" units="degrees" toexpr="x" frexpr="x" format="%.0f" min="-61" max="61" inc="1" storagetype="int8" endian="big"/>
+	<scaling name="Timing Retard" units="units" toexpr="61-(90*x/256)" frexpr="(61-x)/90*256" format="%.0f" min="0" max="255" inc="1" storagetype="uint16" endian="big"/>
+	<scaling name="Timingcomensation" units="units" toexpr="(x-128)*-1" frexpr="(x/-1)+128" format="%.0f" min="-61" max="61" inc="1" storagetype="uint8" endian="big"/>
+	<scaling name="TPS Percent" units="%" toexpr="x*100/255" frexpr="x*255/100" format="%.0f" min="0" max="100" inc="1" storagetype="uint16" endian="big"/>
+	<scaling name="ValveTiming" units="degrees" toexpr="72-x*0.6" frexpr="(72-x)/0.6" format="%.1f" min="0" max="30" inc="0.6" storagetype="uint8" endian="big"/>
+	<scaling name="VehicleSpeed" units="km/h" toexpr="x*2" frexpr="x/2" format="%.0f" min="0" max="510" inc="1" storagetype="uint16" endian="big"/>
+	<scaling name="VehicleSpeed8" units="units" toexpr="x*2" frexpr="x/2" format="%.0f" min="0" max="510" inc="1" storagetype="uint8" endian="big"/>
+	<scaling name="Volts16" units="Volts" toexpr="x*5/256" frexpr="x*256/5" format="%.2f" min="0" max="5" inc="0.05" storagetype="uint16" endian="big"/>
+	<scaling name="WGDuty" units="%" toexpr="x/2" frexpr="x*2" format="%.1f" min="0" max="100" inc="0.5" storagetype="uint8" endian="big"/>
+	<scaling name="uint16" units="units" toexpr="x" frexpr="x" format="%.0f" min="0" max="65535" inc="1" storagetype="uint16" endian="big"/>
+	<scaling name="uint8" units="units" toexpr="x" frexpr="x" format="%.0f" min="0" max="255" inc="1" storagetype="uint8" endian="big"/>
+
+	<!-- 2026-08-13 Claude: the 96 duplicate top-level tables that used to sit here (Air, Fuel,
+	     Lean Spool, Timing, Limits, Knock Control, ISCV Control, Idle, Turbo, Identification,
+	     ECU/Misc sections) have been REMOVED - each had a more current, hand-corrected duplicate
+	     in 21000011_1997-2001_RVR_X3_Mt__4g63t_.xml, the only file that includes this base. See
+	     the notes block above for the full rationale. Kept below: the few tables that have NO
+	     override in that ROM-specific file, plus the SCALING_TABLE_* holding-pen block and the
+	     TCU/MUT sections (also present here only). -->
+
+	<table name="Post Start Enrich Decay Multiplier" category="Fuel" address="11d98" type="2D" level="2" scaling="EnrichmentAdj">
+		<table name="Time" address="2d42e" type="X Axis" elements="9" scaling="Temp"/>
+	</table>
+
+	<table name="Launch Control Speed Limit" category="Limits" address="12f84" type="1D" level="1" scaling="VehicleSpeed"/>
+
+	<!-- ===== SCALING TABLES (unresolved) ===== -->
+	<!-- 2026-08 [Ghidra RE]: raw H8539F-SCRAPED-TABLE (Scaling) records from the ROM scraper,
+	     exposed here as plain 1D byte arrays (scaling="uint8", no header bytes  confirmed via
+	     live ROM read at 0x12065) so the numbers can be eyeballed and a real scaling/purpose
+	     assigned once identified. Not yet wired to any caller/table category is a holding pen. -->
+
+	<!-- 2026-08-13 Claude: the 7 "Scaling 12065/1208B/1209E/121C3/121D6/12222/1246F" entries
+	     that were here have been REMOVED. Ghidra's own H8539F-TABLE scrape types all 7 as
+	     "(1D scalar) db[2]" - plain 2-byte scalar values, not multi-element axis/breakpoint
+	     tables - so the elements="N" attributes and "no header found" comments previously
+	     here were wrong (based on a mistaken header-hunt in a region that doesn't use the
+	     axis-header convention at all; every genuine H8539F-AXIS entry lives in 0x2d0xx-0x2d8xx,
+	     none in 0x120xx-0x124xx). Moved to 21000011_1997-2001_RVR_X3_Mt__4g63t_.xml (the
+	     ROM-specific file, not this shared base) as corrected 1D scalars. -->
+
+	<table name="SCALING_TABLE_00013576" category="Scaling Tables" address="1357C" type="1D" level="3" elements="139" scaling="uint8">
+		<!-- header 13576: F0D2 F116 008B (count=139). Data starts at 1357C. Not yet shape/value checked. -->
+	</table>
+
+	<table name="SCALING_TABLE_00023CEA" category="Scaling Tables" address="23CF0" type="1D" level="3" elements="84" scaling="uint8">
+		<!-- header 23CEA: F216 F436 0054 (count=84). Data starts at 23CF0. Not yet shape/value checked. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D080" category="Scaling Tables" address="2D086" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- header 2d080: out-ptr F0C4, in-ptr F170. Data starts at 2d086. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D09A" category="Scaling Tables" address="2D0A0" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- header 2d09a: out-ptr F0C0, in-ptr F170. Data starts at 2d0a0. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D0C0" category="Scaling Tables" address="2D0C6" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- header 2d0c0: out-ptr F0C0, in-ptr F170. Data starts at 2d0c6. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D0D2" category="Scaling Tables" address="2D0D8" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- header 2d0d2: out-ptr F0C0, in-ptr F170. Data starts at 2d0d8. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D0F0" category="Scaling Tables" address="2D0F6" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- header 2d0f0: out-ptr F0C0, in-ptr F170. Data starts at 2d0f6. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D116" category="Scaling Tables" address="2D11C" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- header 2d116: out-ptr F0C0, in-ptr F170. Data starts at 2d11c. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D130" category="Scaling Tables" address="2D136" type="1D" level="3" elements="8" scaling="uint8">
+		<!-- header 2d130: out-ptr F0C0, in-ptr F2D8, count=8. Data: 1875,2562.5,2812.5,3000,3187.5,3375,3562.5
+		     as RPM (x*1000/256) - not round. As Load (x*10/32): 150,205,225,240,255,270,285 - out of normal
+		     0-100 range. Neither candidate fits cleanly. Left UNIDENTIFIED, try scaling here. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D146" category="Scaling Tables" address="2D14C" type="1D" level="3" elements="9" scaling="uint8">
+		<!-- DUPLICATE: same header as the already-documented "Error" axis (Idle Error Correction - Neutral,
+		     address 2d146, X Axis, elements=9, scaling=RPM). Data 0,8,16,24,32,40,48,56,64. Kept here for
+		     quick comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D15E" category="Scaling Tables" address="2D164" type="1D" level="3" elements="14" scaling="uint8">
+		<!-- header 2d15e: out-ptr F0C6 (AirTemp/ADC), in-ptr F190. Data 32,64,96...448, linear step-32.
+		     Too high for direct Temp(x-40); consistent with raw ADC-domain Air Temp. Try scalings here. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D180" category="Scaling Tables" address="2D186" type="1D" level="3" elements="6" scaling="uint8">
+		<!-- header 2d180: out-ptr F0C0 (RPM), in-ptr F35E. Data 0,64,128,192,256,320 -> RPM(x*1000/256) =
+		     0,250,500,750,1000,1250, clean. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D192" category="Scaling Tables" address="2D198" type="1D" level="3" elements="14" scaling="uint8">
+		<!-- DUPLICATE: identical header/data to the already-documented RPM axis at 2d192->2d198
+		     ("Post Start Enrich Trim vs Load", X Axis, elements=14, scaling=RPM). Kept here for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D1B4" category="Scaling Tables" address="2D1BA" type="1D" level="3" elements="32" scaling="uint8">
+		<!-- header 2d1b4: out-ptr F0C0, in-ptr F0BA (matches "Error" family, see 2d146/2d192). Data
+		     10,11,12...41, linear step-1, very small - same anomalous-small pattern as "Error". Try
+		     Error-style scalings here. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D1FA" category="Scaling Tables" address="2D200" type="1D" level="3" elements="5" scaling="uint8">
+		<!-- header 2d1fa: out-ptr F0C0, in-ptr F436. Data as Load(x*10/32): 20,25,30,35,40 - clean round
+		     5%-step curve despite RPM out-ptr tag. Likely Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D20A" category="Scaling Tables" address="2D210" type="1D" level="3" elements="4" scaling="uint8">
+		<!-- header 2d20a: out-ptr F0C2 (Load/MAP), in-ptr F0BA. Data 34,50,66,82 -> Load(x*10/32) =
+		     10.6,15.6,20.6,25.6, clean. Likely Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D218" category="Scaling Tables" address="2D21E" type="1D" level="3" elements="21" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "Load (MAF Hz raw)" table (address 2d21e,
+		     elements=21, scaling=uint16, used by MAF Scaling / MAF Smoothing Table). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D248" category="Scaling Tables" address="2D24E" type="1D" level="3" elements="9" scaling="uint8">
+		<!-- header 2d248: out-ptr F0C0 (RPM), in-ptr F1E0. Data 0,256,512,768,1024,1280,1536,1792,2048 ->
+		     RPM = 0,1000,2000...8000, clean linear. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D260" category="Scaling Tables" address="2D266" type="1D" level="3" elements="7" scaling="uint8">
+		<!-- header 2d260: out-ptr F0C0, in-ptr F13A. Data as Load(x*10/32): 20,30,40,50,60,70,~80 -
+		     clean round 10%-step, despite RPM out-ptr tag. Likely Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D274" category="Scaling Tables" address="2D27A" type="1D" level="3" elements="9" scaling="uint8">
+		<!-- header 2d274: out-ptr F0C0, in-ptr F13A (same as 2d260). Data as Load(x*10/32):
+		     40,45,50,55,60,65,70,75,~80 - clean round 5%-step. Likely Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D28C" category="Scaling Tables" address="2D292" type="1D" level="3" elements="5" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "Baro Press." table (address 2d292, elements=5,
+		     scaling=Load16, used by "Ignition Trim - Baro"). Data matches exactly (93,125,157,173,189).
+		     Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D29C" category="Scaling Tables" address="2D2A2" type="1D" level="3" elements="4" scaling="uint8">
+		<!-- header 2d29c: same in-ptr F130 as Baro Press. family. Data 157,173,189,205 -> Load16(x*5/8) =
+		     98,108,118,128, plausible Baro-family values. Likely Baro Press.-family. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D2AA" category="Scaling Tables" address="2D2B0" type="1D" level="3" elements="14" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented RPM axis at 2d2b0 (elements=14, scaling=RPM,
+		     used by High Octane Fuel Map etc). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D2CC" category="Scaling Tables" address="2D2D2" type="1D" level="3" elements="7" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "RPM" axis at 2d2d2 (elements=7,
+		     scaling=RPMStatLimit, used by Boost Enhancement Anti-lag Table). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D2E0" category="Scaling Tables" address="2D2E6" type="1D" level="3" elements="14" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "RPM" axis at 2d2e6 (elements=14, scaling=RPM,
+		     used by Knock Control Above Load / Lean Spool Trailing Time). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D302" category="Scaling Tables" address="2D308" type="1D" level="3" elements="18" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "Load" axis at 2d308 (elements=18, scaling=Load,
+		     used by High/Low Octane Fuel Map). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D32C" category="Scaling Tables" address="2D332" type="1D" level="3" elements="18" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "RPM" axis at 2d332 (elements=18, scaling=RPM,
+		     used by High Octane Ignition Map 1 etc). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D356" category="Scaling Tables" address="2D35C" type="1D" level="3" elements="16" scaling="uint8">
+		<!-- header 2d356: out-ptr F0C2 (Load/MAP), in-ptr F0BA. Data as Load(x*10/32):
+		     0,10,20...180,260 - mostly clean, tail clamp value. Not matched elsewhere. Likely Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D37C" category="Scaling Tables" address="2D382" type="1D" level="3" elements="19" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "Load" axis at 2d382 (elements=19, scaling=Load,
+		     used by High Octane Ignition Map 1 etc). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D3A8" category="Scaling Tables" address="2D3AE" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- header 2d3a8: out-ptr F0C0, in-ptr F0BA. Data as Load(x*10/32):
+		     40,50,60,70,80,90,100,120,140,160 - clean 10%-step, extends past 100%. Likely Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D3C2" category="Scaling Tables" address="2D3C8" type="1D" level="3" elements="9" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "TPS" axis at 2d3c8 (elements=9,
+		     scaling="TPS Percent", used by Max Total Upward WGDC Correction vs TPS). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D3DA" category="Scaling Tables" address="2D3E0" type="1D" level="3" elements="7" scaling="uint8">
+		<!-- header 2d3da: out-ptr F0C0 (RPM), but data 33,65,97,129,161,193,225 exactly matches the
+		     "Engine Load" data pattern (Load x*10/32 -> 10.3-70.3%, clean). Likely Load despite out-ptr. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D3EE" category="Scaling Tables" address="2D3F4" type="1D" level="3" elements="5" scaling="uint8">
+		<!-- header 2d3ee: out-ptr F0C0 (RPM), in-ptr F170. Data 128,256,512,768,1024 -> RPM =
+		     500,1000,2000,3000,4000, clean coarse. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D3FE" category="Scaling Tables" address="2D404" type="1D" level="3" elements="7" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "Engine Load" table (address 2d404, elements=7,
+		     scaling=Load - see review12.md batch-1 fix). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D412" category="Scaling Tables" address="2D418" type="1D" level="3" elements="8" scaling="uint8">
+		<!-- header 2d412: out-ptr F0C8 (CoolantTempB/ADC), in-ptr F10E. Data 8,32,47,60,74,90,117,122 ->
+		     Temp(x-40) = -32,-8,7,20,34,50,77,82, closely matches documented Engine Temp curve shape.
+		     Likely Engine Temp (CoolantTempB/ADC domain). -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D428" category="Scaling Tables" address="2D42E" type="1D" level="3" elements="9" scaling="uint8">
+		<!-- header 2d428: out-ptr F0CA (TimeAfterStart), in-ptr F10E. Data 8,22,32,47,60,74,90,117,122 is
+		     Temp-shaped, not a typical time ramp. Address 2d42e also hosts the documented "Time"/
+		     "Engine Temp" duplicate-name oddity (review12.md section 6, unresolved). Out-ptr says Time,
+		     data shape says Temp - unresolved conflict, try both scalings. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D440" category="Scaling Tables" address="2D446" type="1D" level="3" elements="11" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "Temp" axis at 2d446 (elements=11, scaling=Temp,
+		     used by Cranking Primer - First Pulse). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D45C" category="Scaling Tables" address="2D462" type="1D" level="3" elements="8" scaling="uint8">
+		<!-- header 2d45c: out-ptr F0CE (ISCVDemand), in-ptr F10E. Data 8,32,47,60,74,90,117,122 identical
+		     to Engine Temp family. Likely Engine Temp axis used in an ISCV-demand-context caller. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D472" category="Scaling Tables" address="2D478" type="1D" level="3" elements="12" scaling="uint8">
+		<!-- header 2d472: out-ptr F0C0, in-ptr F110. Data is a tight step-2 ramp (128-151), unlike any
+		     other axis in this file. Neither RPM nor Load scale fits. Left UNIDENTIFIED, try scaling here. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D490" category="Scaling Tables" address="2D496" type="1D" level="3" elements="8" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "Engine Temp" table (address 2d496, elements=8,
+		     scaling=Temp - see review12.md batch-1 fix). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D4A6" category="Scaling Tables" address="2D4AC" type="1D" level="3" elements="7" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "Air Temp" table (address 2d4ac, elements=7,
+		     scaling=Temp, used by Air Temperature Compensation). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D4BA" category="Scaling Tables" address="2D4C0" type="1D" level="3" elements="8" scaling="uint8">
+		<!-- header 2d4ba: same in-ptr F10E as Engine Temp family. Data 8,32,47,53,60,67,74,81 ->
+		     Temp(x-40) = -32,-8,7,13,20,27,34,41, clean Temp-shaped curve (variant breakpoints). Likely
+		     Engine Temp. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D4D0" category="Scaling Tables" address="2D4D6" type="1D" level="3" elements="27" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "ISCV Demand" axis at 2d4d6 (elements=27,
+		     scaling=ISCV_AX2_16, used by Idle Stepper Lookup Table). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D50C" category="Scaling Tables" address="2D512" type="1D" level="3" elements="15" scaling="uint8">
+		<!-- header 2d50c: out-ptr F0C0 (RPM), in-ptr F170. Data 192,256,320,384,512,640,768,896,1024,1152,
+		     1280,1408,1536,1664,1792 -> RPM = 750,1000,1250,1500,2000...7000, clean linear. Not matched
+		     elsewhere. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D530" category="Scaling Tables" address="2D536" type="1D" level="3" elements="9" scaling="uint8">
+		<!-- header 2d530: out-ptr F0C2, in-ptr F0BA. Data 0,8,16,24,32,40,48,56,64 - identical sequence to
+		     documented "Error" axis at 2d146 (same F0BA in-ptr, different out-ptr F0C2). Likely
+		     Error-family. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D548" category="Scaling Tables" address="2D54E" type="1D" level="3" elements="17" scaling="uint8">
+		<!-- header 2d548: out-ptr F0D4 (not in documented pointer map), in-ptr F0BE. Data
+		     0,8,16,24,32,...128, linear step-8, extends the "Error" axis pattern (0,8,16...64 at 2d146,
+		     9 elements) to a full 17-element run - matches EVO5 cross-check (review12.md section 7:
+		     EVO5's Error axis has 17 elements to 128 vs RVR's 9 to 64). Likely RVR Error axis's
+		     extended/sibling table. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D570" category="Scaling Tables" address="2D576" type="1D" level="3" elements="16" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "RPM" axis at 2d576 (elements=16, scaling=RPM,
+		     used by Max Wastegate Duty #1-4). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D596" category="Scaling Tables" address="2D59C" type="1D" level="3" elements="17" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "Boost Error" axis at 2d59c (elements=17,
+		     scaling=BoostError, used by Turbo Boost Error Correction). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D5BE" category="Scaling Tables" address="2D5C4" type="1D" level="3" elements="9" scaling="uint8">
+		<!-- header 2d5be: out-ptr F0C0, in-ptr F13E. Data as Load(x*10/32):
+		     0,10,20,30,40,50,60,70,~80 - clean round 10%-step, despite RPM out-ptr tag. Likely Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D5D6" category="Scaling Tables" address="2D5DC" type="1D" level="3" elements="9" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "RPM" axis at 2d5dc (elements=9, scaling=RPM,
+		     used by Boost Desired Engine Load #1). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D5EE" category="Scaling Tables" address="2D5F4" type="1D" level="3" elements="9" scaling="uint8">
+		<!-- header 2d5ee: out-ptr F0C0 (RPM), in-ptr F170. Data 0,128,256,384,512,640,768,896,1024 -> RPM
+		     = 0,500,1000...4000, clean linear. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D606" category="Scaling Tables" address="2D60C" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- header 2d606: out-ptr F0C0 (RPM), in-ptr F170. Data 256,320,384,448,512,640,768,896,1024,1152
+		     -> RPM = 1000,1250,1500,1750,2000,2500,3000,3500,4000,4500, clean. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D620" category="Scaling Tables" address="2D626" type="1D" level="3" elements="8" scaling="uint8">
+		<!-- header 2d620: out-ptr F0C2 (Load/MAP), in-ptr F190. Data 48,64,80,96,128,160,192,224 ->
+		     Load(x*10/32) = 15,20,25,30,40,50,60,70, clean. Likely Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D636" category="Scaling Tables" address="2D63C" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "RPM" axis at 2d63c (elements=10, scaling=RPM,
+		     used by all 5 Knock Sensor Filter Map tables). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D650" category="Scaling Tables" address="2D656" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- DUPLICATE: same header as already-documented "Load" axis at 2d656 (elements=10, scaling=Load,
+		     used by all 5 Knock Sensor Filter Map tables). Kept for comparison. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D66A" category="Scaling Tables" address="2D670" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- header 2d66a: out-ptr F0C0, in-ptr F190. Data as Load(x*10/32):
+		     10,20,30,40,50,60,70,80,90,100 - perfectly clean 10%-step, despite RPM out-ptr tag. Likely
+		     Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D684" category="Scaling Tables" address="2D68A" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- header 2d684: out-ptr F0C0 (RPM), in-ptr F170. Data 128,256,384,512,640,768,896,1024,1152,1280
+		     -> RPM = 500,1000,1500...5000, clean linear. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D69E" category="Scaling Tables" address="2D6A4" type="1D" level="3" elements="8" scaling="uint8">
+		<!-- header 2d69e: out-ptr F0C0 (RPM), in-ptr F170. Data 192,256,320,384,512,640,768,896 -> RPM =
+		     750,1000,1250,1500,2000,2500,3000,3500, clean. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D6B4" category="Scaling Tables" address="2D6BA" type="1D" level="3" elements="16" scaling="uint8">
+		<!-- header 2d6b4: out-ptr F0C0 (RPM), in-ptr F170. Data 128,192,256,320,384,512,640,768,896,1024,
+		     1152,1280,1408,1536,1664,1792 -> RPM = 500,750,1000,1250,1500,2000...7000, clean, denser at
+		     low range. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D6DA" category="Scaling Tables" address="2D6E0" type="1D" level="3" elements="17" scaling="uint8">
+		<!-- header 2d6da: out-ptr F0C0, in-ptr F0BA (same as "Error" family). Data
+		     0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16, linear step-1, extremely small - same anomalous
+		     pattern as "Error"/2d146 and 2d1b4. Likely Error-family. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D702" category="Scaling Tables" address="2D708" type="1D" level="3" elements="9" scaling="uint8">
+		<!-- header 2d702: out-ptr F0C0 (RPM), in-ptr F170. Data 192,256,320,384,512,640,768,896,1024 ->
+		     RPM = 750,1000,1250,1500,2000,2500,3000,3500,4000, clean. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D71A" category="Scaling Tables" address="2D720" type="1D" level="3" elements="8" scaling="uint8">
+		<!-- header 2d71a: out-ptr F0C2 (Load/MAP), in-ptr F13E. Data 24,32,40,48,56,64,72,80 ->
+		     Load(x*10/32) = 7.5,10,12.5,15,17.5,20,22.5,25, clean small curve. Likely Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D730" category="Scaling Tables" address="2D736" type="1D" level="3" elements="11" scaling="uint16">
+		<!-- header 2d730: out-ptr F0C0 (RPM), in-ptr F0BA. Raw uint16 data runs approx
+		     29491,29819,30147,...33000 - far larger than any RPM-scaled axis elsewhere in this file. Does
+		     not fit RPM, Load, or Temp cleanly. Left UNIDENTIFIED, try scaling here (declared uint16
+		     since values exceed uint8 range). -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D74C" category="Scaling Tables" address="2D752" type="1D" level="3" elements="4" scaling="uint8">
+		<!-- header 2d74c: out-ptr F0C0 (RPM), in-ptr F170. Data 0,128,192,256 -> RPM = 0,500,750,1000,
+		     clean small linear. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D75A" category="Scaling Tables" address="2D760" type="1D" level="3" elements="7" scaling="uint8">
+		<!-- header 2d75a: out-ptr F0C2 (Load/MAP), in-ptr F0BA. Data 0,32,64,96,128,160,192 ->
+		     Load(x*10/32) = 0,10,20,30,40,50,60, clean. Likely Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D76E" category="Scaling Tables" address="2D774" type="1D" level="3" elements="8" scaling="uint8">
+		<!-- header 2d76e: out-ptr F0C0 (RPM), in-ptr F170. Data 128,256,384,512,640,768,896,1024 -> RPM =
+		     500,1000,1500...4000, clean linear. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D784" category="Scaling Tables" address="2D78A" type="1D" level="3" elements="7" scaling="uint8">
+		<!-- header 2d784: out-ptr F0C0 (RPM), in-ptr F170. Data 128,192,256,320,384,448,512 -> RPM =
+		     500,750,1000,1250,1500,1750,2000, clean. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D798" category="Scaling Tables" address="2D79E" type="1D" level="3" elements="9" scaling="uint8">
+		<!-- header 2d798: out-ptr F0C0 (RPM), in-ptr F170. Data 192,256,320,384,448,512,640,768,896 ->
+		     RPM = 750,1000,1250,1500,1750,2000,2500,3000,3500, clean. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D7B0" category="Scaling Tables" address="2D7B6" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- header 2d7b0: out-ptr F0C2 (Load/MAP), in-ptr F190. Data 32,64,96,128,160,192,224,256,288,320
+		     -> Load(x*10/32) = 10,20,30...100, very clean. Likely Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D7DA" category="Scaling Tables" address="2D7E0" type="1D" level="3" elements="19" scaling="uint8">
+		<!-- header 2d7da: out-ptr F0C0 (RPM), in-ptr F170. Data 128,192,256,320,384,448,512,576,640,704,
+		     768,896,1024,1152,1280,1408,1536,1664,1792 -> RPM = 500,750,1000...7000, clean dense. Likely
+		     RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D806" category="Scaling Tables" address="2D80C" type="1D" level="3" elements="11" scaling="uint8">
+		<!-- header 2d806: out-ptr F0C2 (Load/MAP), in-ptr F190. Data 86,113,140,167,194,248,302,356,383,
+		     410,463 -> Load(x*10/32) = 27,35,44,52,61,78,94,111,120,128,145, clean monotonic. Likely
+		     Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D822" category="Scaling Tables" address="2D828" type="1D" level="3" elements="15" scaling="uint8">
+		<!-- header 2d822: out-ptr F0C0, in-ptr F13E. Data as Load(x*10/32): 5,10,15,20,25,30,35,40,45,50,
+		     55,60,65,70,75 - perfectly clean 5%-step, despite RPM out-ptr tag. Likely Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D846" category="Scaling Tables" address="2D84C" type="1D" level="3" elements="5" scaling="uint8">
+		<!-- header 2d846: same in-ptr F130 as Baro Press. family (2d28c, 2d29c). Data 125,141,157,173,189
+		     -> Load16(x*5/8) = 78,88,98,108,118, plausible Baro-family values. Likely Baro Press.-family. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D856" category="Scaling Tables" address="2D85C" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- header 2d856: out-ptr F0C0 (RPM), in-ptr F170. Data 128,256,320,384,448,512,640,768,896,1024
+		     -> RPM = 500,1000,1250,1500,1750,2000,2500,3000,3500,4000, clean. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D870" category="Scaling Tables" address="2D876" type="1D" level="3" elements="11" scaling="uint8">
+		<!-- header 2d870: out-ptr F0C0, in-ptr EF56 (unusual - not the F0Cx/F0Dx/F1xx/F2xx family used
+		     elsewhere). Data 20,22,24,26,28,30,32,34,36,38,40, linear step-2, small values similar in
+		     scale to "Error"-family but distinct in-ptr. Left UNIDENTIFIED, try scaling here. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D88C" category="Scaling Tables" address="2D892" type="1D" level="3" elements="6" scaling="uint8">
+		<!-- header 2d88c: out-ptr F0C0, in-ptr F1E8. Neither RPM (117.2,148.4...273.4) nor Load
+		     (9.4,11.9...21.9) scale lands on round numbers. Left UNIDENTIFIED, try scaling here. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D89E" category="Scaling Tables" address="2D8A4" type="1D" level="3" elements="6" scaling="uint8">
+		<!-- header 2d89e: out-ptr F0C0 (RPM), in-ptr F170. Data 384,512,640,768,896,1024 -> RPM =
+		     1500,2000,2500,3000,3500,4000, clean. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D8B0" category="Scaling Tables" address="2D8B6" type="1D" level="3" elements="3" scaling="uint8">
+		<!-- header 2d8b0: out-ptr F0C2 (Load/MAP), in-ptr F190. Data 194,301,409 -> Load(x*10/32) =
+		     61,94,128, clean small curve. Likely Load. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D8BC" category="Scaling Tables" address="2D8C2" type="1D" level="3" elements="10" scaling="uint8">
+		<!-- header 2d8bc: out-ptr F0C0 (RPM), in-ptr F170. Data 128,256,384,512,640,768,896,1024,1152,1280
+		     -> RPM = 500,1000...5000, clean linear. Likely RPM. -->
+	</table>
+
+	<table name="SCALING_TABLE_0002D8D6" category="Scaling Tables" address="2D8DC" type="1D" level="3" elements="8" scaling="uint8">
+		<!-- header 2d8d6: out-ptr F0C0, in-ptr F1A8. Neither RPM (168,273.4...902.3) nor Load
+		     (13.4,21.9...72.2) is fully round, though Load is closer. Try scaling here; tentatively
+		     Load. -->
+	</table>
+
+	<!-- 2026-08-13 Claude: SCALING_TABLE block restored and rebuilt after an earlier deletion this
+	     session removed it by mistake. Each entry above now uses the real data address (header+6)
+	     instead of the 6-byte pointer/count header, is a standalone 1D table (no Dummy Axis filler,
+	     no orphaned comment children, no stray closing tags), and starts at scaling="uint8" (or
+	     uint16 where values exceed uint8 range) so it is freely re-scalable in EcuFlash. Comments
+	     retain the out-ptr/in-ptr/candidate-identity notes from the original review12.md pass.
+	     Entries marked DUPLICATE point at the same live ROM data as an already-documented,
+	     properly-named table elsewhere in this file - kept here anyway for quick side-by-side
+	     comparison while experimenting with scalings, per PJ's request. No table was renamed
+	     away from its generic SCALING_TABLE_XXXXXXXX label; assigning a real name/scaling is a
+	     follow-up step once you've confirmed identity for each one in EcuFlash. -->
+
+
+
+	<!-- ============================================================
+	     2026-08-09 Claude, PJ flagged: "something is wrong, tables
+	     start at wrong address or the axis are wrong". Investigation
+	     found this whole "Scaling Tables" block (from Scaling 2D080
+	     through Scaling 2D8D6, plus Scaling 13576 and Scaling 23CEA
+	     below  71 entries total) is a single systemic scraper bug,
+	     NOT 71 separate real tables.
+
+	     Root cause: every removed entry's address points at the START
+	     of a 6-byte axis-lookup header (byte pattern [ptr1_hi ptr1_lo
+	     ptr2_hi ptr2_lo count_hi count_lo], e.g. F0 C0 F1 70 00 0A),
+	     not at real scaling data. The scraper read header+data as one
+	     flat uint8 blob (elements = 6 + realCount*2, exactly, in every
+	     case checked) instead of recognizing the header and pointing
+	     at the real breakpoint data 6 bytes later.
+
+	     This is the EXACT SAME bug already found, byte-verified, and
+	     fixed for the equivalent addresses in
+	     new/21000011_1997-2001_RVR_X3_Mt__4g63t_.xml on 2026-08-04
+	     ("address bug fix 2026-08-04: real breakpoints start at
+	     X+6=Y"  see that file for ~20 individually-traced examples
+	     with named parent tables and caller evidence)  that fix was
+	     never ported back to this shared base file, which is why the
+	     bug was still live here. Verified by direct ROM read
+	     (ghidra:read_memory) across the full 2d080-2d8d6 span in one
+	     call: every 6-byte block in that entire ~2000-byte region
+	     starts with an F0Cx/F0Dx/F2xx-style RAM-pointer prefix byte,
+	     zero exceptions. Also independently verified 13576 (F0D2 F116
+	     008B header, count=0x8B=139, 6+139*2=284 matches the removed
+	     entry's claimed size) and 23cea (F216 F436 0054 header,
+	     count=0x54=84, 6+84*2=174 matches) by the same method.
+
+	     NOT part of this bug, left AS-IS: the 12065-1246f cluster
+	     above  byte-checked, real correction-curve data (small
+	     signed-looking bytes, no F0Cx-style header), genuinely
+	     different table family.
+
+	     These addresses are NOT unused/dead  most are the SAME real,
+	     already-named axes documented elsewhere in this file (e.g.
+	     2d0f0's real data at 2d0f6 is the "RPM" axis also visible at
+	     2d0a0/2d332/etc under other table names), just duplicated here
+	     under a generic "Scaling NNNN" label pointing at the wrong
+	     (header, not data) address. Removing them does not lose any
+	     table  the real axis is still present under its proper name
+	     elsewhere. Where a real axis was NOT already present elsewhere
+	     under its own name (i.e. this was the only XML entry for that
+	     address), the address+6 correction and a proper X/Y-Axis entry
+	     still needs to be added in a follow-up pass with its own
+	     caller trace, matching this project's standing discipline of
+	     never guessing an axis's semantic name/scaling without
+	     evidence  flagged here rather than silently dropped.
+	     ============================================================ -->
+
+	<!-- ===== TCU / TRANSMISSION ===== -->
+	<!-- Addresses confirmed from Ghidra analysis of tcu_shift_torque_mgmt @ 0x28fff -->
+	<!-- Called from isr_sci3_eri @ 0x168e3 on every crank pulse via SCI3 channel -->
+	<!-- ECU communicates with TCU over SCI3 serial (sci3_rx_process_tcu_byte, isr_sci3_rxi_tcu_rx) -->
+
+	<!-- Gear ratio table: 4 entries (gears 0-3), H8 timer period counts for ratio detection -->
+	<!-- gear_ratio_table @ ROM 0x3284: 0x9191, 0x4646, 0x1919, 0x6464 -->
+	<table name="TCU Gear Ratio Periods" category="Transmission" address="13284" type="2D" level="2" scaling="uint16">
+		<table name="Gear" type="Static X Axis" elements="4">
+			<data>1st</data>
+			<data>2nd</data>
+			<data>3rd</data>
+			<data>4th</data>
+		</table>
+	</table>
+
+	<!-- Shift torque command byte, low per gear (tcu_cmd_byte selection) -->
+	<!-- shift_torque_lo_table @ ROM 0x328e -->
+	<!-- [SESSION 10, 2026-07-03 CONFIRMED] Traced via full decompile of the merged
+	     tcu_shift_torque_and_knock_mgmt function (was mis-split across 4 Ghidra
+	     functions - see logging.txt session 10 for the structural fix). This value
+	     is read into RAM 0xf39e, then (a) ANDed as a bitmask against an SCI3
+	     ready-check result at ROM 0x293b6, and (b) passed directly as a parameter
+	     to an SCI3 transmission helper at ROM 0x293c7. It is a raw protocol command
+	     byte sent to the TCU over the SCI3 serial link - never used in any
+	     arithmetic/scaling operation. The existing uint16 "units" scaling (not a
+	     torque/Nm scaling) is CORRECT as-is; small values like 1-2 are expected and
+	     not a data error. -->
+	<table name="TCU Shift Torque Cmd Lo - Per Gear" category="Transmission" address="1328e" type="2D" level="2" scaling="uint16">
+		<table name="Gear" type="Static X Axis" elements="4">
+			<data>1st</data>
+			<data>2nd</data>
+			<data>3rd</data>
+			<data>4th</data>
+		</table>
+	</table>
+
+	<!-- Shift torque command byte, high per gear -->
+	<!-- shift_torque_hi_table @ ROM 0x3296 -->
+	<!-- [SESSION 10, 2026-07-03 CONFIRMED] Same trace as Cmd Lo above - read into
+	     RAM 0xf3a0 alongside the Lo table, part of the same per-gear SCI3 command
+	     byte pair sent to the TCU. uint16 "units" scaling confirmed correct. -->
+	<table name="TCU Shift Torque Cmd Hi - Per Gear" category="Transmission" address="13296" type="2D" level="2" scaling="uint16">
+		<table name="Gear" type="Static X Axis" elements="4">
+			<data>1st</data>
+			<data>2nd</data>
+			<data>3rd</data>
+			<data>4th</data>
+		</table>
+	</table>
+
+	<!-- Upshift torque offset per gear (added to torque request when sport mode active, f33e bit3 set) -->
+	<!-- @ ROM 0x287a, 4 x uint8 -->
+	<table name="TCU Upshift Torque Offset - Per Gear" category="Transmission" address="1287a" type="2D" level="3" scaling="uint8">
+		<table name="Gear" type="Static X Axis" elements="4">
+			<data>1st</data>
+			<data>2nd</data>
+			<data>3rd</data>
+			<data>4th</data>
+		</table>
+	</table>
+
+	<!-- Downshift torque offset per gear (sport mode, f33e bit5 set) -->
+	<!-- @ ROM 0x287e, 4 x uint8 -->
+	<table name="TCU Downshift Torque Offset - Per Gear" category="Transmission" address="1287e" type="2D" level="3" scaling="uint8">
+		<table name="Gear" type="Static X Axis" elements="4">
+			<data>1st</data>
+			<data>2nd</data>
+			<data>3rd</data>
+			<data>4th</data>
+		</table>
+	</table>
+
+	<!-- TCU torque target rate-of-change limit (used in sat_sub for rise/fall slew rate) -->
+	<!-- ROM 0xad0 = 0x0040 = 64 -->
+	<table name="TCU Torque Target Rise Rate Limit" category="Transmission" address="10ad0" type="1D" level="2" scaling="uint16"/>
+
+	<!-- ROM 0xace = 0x061a = 1562 — torque target slew rate when approaching from below -->
+	<table name="TCU Torque Target Fall Rate Limit" category="Transmission" address="10ace" type="1D" level="2" scaling="uint16"/>
+
+	<!-- Min throttle load for TCU active (below this, TCU shift mgmt exits early) -->
+	<!-- CORRECTED 2026-07-26: was address="10ad2" (claimed 0x00bc=188); verified via live ROM read
+	     that 0x00bc actually sits at 0x10ad4, and 0x10ad2 holds 0x061a=1562. See review.md TCU
+	     rate-limit verification entry. -->
+	<!-- ROM 0xad4 = 0x00bc = 188 -->
+	<table name="TCU Min Load Threshold" category="Transmission" address="10ad4" type="1D" level="2" scaling="uint16"/>
+
+	<!-- Max torque target cap (absolute ceiling) -->
+	<!-- CORRECTED 2026-07-26: was address="10ad4" (claimed 0x0014=20); verified via live ROM read
+	     that 0x0014 actually sits at 0x10ad6. -->
+	<!-- ROM 0xad6 = 0x0014 = 20 -->
+	<table name="TCU Torque Target Max" category="Transmission" address="10ad6" type="1D" level="2" scaling="uint16"/>
+
+	<!-- Torque ramp rate limit (added to tcu_torque_actual for max rate) -->
+	<!-- CORRECTED 2026-07-26: was address="10ad8" (claimed 0x000f=15); verified via live ROM read
+	     that 0x000f actually sits at 0x10ada, and 0x10ad8 holds 0x00fa=250 (this table and
+	     "Torque Reduction Scale" below were also address-swapped in the original entry). -->
+	<!-- ROM 0xada = 0x000f = 15 -->
+	<table name="TCU Torque Ramp Rate" category="Transmission" address="10ada" type="1D" level="2" scaling="uint16"/>
+
+	<!-- Torque reduction scaling divisor for shift events (muldiv, 0x200 = 512 = 1.0 scale) -->
+	<!-- CORRECTED 2026-07-26: was address="10ada" (claimed 0x00fa=250); verified via live ROM read
+	     that 0x00fa actually sits at 0x10ad8. -->
+	<!-- ROM 0xad8 = 0x00fa = 250 -->
+	<table name="TCU Torque Reduction Scale" category="Transmission" address="10ad8" type="1D" level="2" scaling="uint16"/>
+
+	<!-- Max slip adjustment clamp (tcu_torque_slip_adj ceiling) -->
+	<!-- ROM 0xb1a -->
+	<table name="TCU Max Slip Adjustment" category="Transmission" address="10b1a" type="1D" level="2" scaling="uint16"/>
+
+	<!-- Slip adjustment step in lockup mode -->
+	<!-- ROM 0xb26 -->
+	<table name="TCU Slip Adj Step - Lockup" category="Transmission" address="10b26" type="1D" level="2" scaling="uint16"/>
+
+	<!-- Slip adjustment step in non-lockup mode -->
+	<!-- ROM 0xb28 -->
+	<table name="TCU Slip Adj Step - Normal" category="Transmission" address="10b28" type="1D" level="2" scaling="uint16"/>
+
+	<!-- Slip counter threshold to enter lockup solenoid mode -->
+	<!-- ROM 0xb62 -->
+	<table name="TCU Lockup Slip Counter Threshold" category="Transmission" address="10b62" type="1D" level="2" scaling="uint16"/>
+
+	<!-- Solenoid duty delta threshold (normal / sport mode) for slip detection -->
+	<!-- ROM 0xf8a / 0xf8c -->
+	<table name="TCU Solenoid Delta Threshold" category="Transmission" address="10f8a" type="2D" level="3" scaling="uint16">
+		<table name="Mode" type="Static X Axis" elements="2">
+			<data>Normal</data>
+			<data>Sport</data>
+		</table>
+	</table>
+
+	<!-- Slip counter max before lockup flag set (f200 bit0) -->
+	<!-- ROM 0xf8e -->
+	<table name="TCU Slip Counter Max" category="Transmission" address="10f8e" type="1D" level="3" scaling="uint16"/>
+
+	<!-- Slip-based duty cycle gain (normal / lockup) -->
+	<!-- ROM 0xb0a / 0xb08 -->
+	<table name="TCU Slip Duty Gain" category="Transmission" address="10b08" type="2D" level="3" scaling="uint16">
+		<table name="Mode" type="Static X Axis" elements="2">
+			<data>Lockup</data>
+			<data>Normal</data>
+		</table>
+	</table>
+
+	<!-- Max slip adjustment ceiling (normal / lockup) -->
+	<!-- ROM 0xb0c / 0xb0e -->
+	<table name="TCU Max Slip Adj Ceiling" category="Transmission" address="10b0c" type="2D" level="3" scaling="uint16">
+		<table name="Mode" type="Static X Axis" elements="2">
+			<data>Lockup</data>
+			<data>Normal</data>
+		</table>
+	</table>
+
+	<!-- Lockup entry/exit slip thresholds and decay rate -->
+	<!-- ROM 0xb2a = min slip for lockup exit, 0xb2c = max for entry, 0xb2e = decay rate -->
+	<table name="TCU Lockup Slip Thresholds" category="Transmission" address="10b2a" type="2D" level="2" scaling="uint16">
+		<table name="Parameter" type="Static X Axis" elements="3">
+			<data>Exit Min Slip</data>
+			<data>Entry Max Slip</data>
+			<data>Decay Rate</data>
+		</table>
+	</table>
+
+	<!-- ===== MUT TABLE ===== -->
+
+	<table name="MUT Table" category="MUT" address="2fad0" type="3D" level="1" scaling="Hex16">
+		<table name="X" type="Static X Axis" elements="16">
+			<data>0</data>
+			<data>1</data>
+			<data>2</data>
+			<data>3</data>
+			<data>4</data>
+			<data>5</data>
+			<data>6</data>
+			<data>7</data>
+			<data>8</data>
+			<data>9</data>
+			<data>A</data>
+			<data>B</data>
+			<data>C</data>
+			<data>D</data>
+			<data>E</data>
+			<data>F</data>
+		</table>
+		<table name="Y" type="Static Y Axis" elements="16">
+			<data>0X</data>
+			<data>1X</data>
+			<data>2X</data>
+			<data>3X</data>
+			<data>4X</data>
+			<data>5X</data>
+			<data>6X</data>
+			<data>7X</data>
+			<data>8X</data>
+			<data>9X</data>
+			<data>AX</data>
+			<data>BX</data>
+			<data>CX</data>
+			<data>DX</data>
+			<data>EX</data>
+			<data>FX</data>
+		</table>
+	</table>
+
+</rom>

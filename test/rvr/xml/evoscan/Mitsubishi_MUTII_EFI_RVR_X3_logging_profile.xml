@@ -222,14 +222,55 @@
         <DataListItem DataLog="Y" Color="" Display="Unk_0x95_F0BB_dup" LogReference="Unk_95" RequestID="95" Eval="x" Unit="raw" MetricEval="x" MetricUnit="raw" ResponseBytes="1" GaugeMin="0" GaugeMax="255" ChartMin="0" ChartMax="255" ScalingFactor="1" Notes="BLANK (untraced) per mut_verification_status.md master table. RAM 0xF0BB, duplicate address of ReqID 0x83/0x94. Per the 2026-07-13 finding this address is CONFIRMED DEAD (unimplemented/reserved slot) -- kept for completeness only, not expected to show useful data." Priority="4" Visible="False" LogHide="false" />
       </Mode2>
       <Mode5 name="Actuator Tests" type="Actuator Tests">
-        <ActuatorListItem Display="Fuel Pump Relay" RequestID="01" Notes="Forces the fuel pump on for testing. [RAM CONFIRMED via Ghidra decompilation of adc_sensor_convert_single (0x171c3) + MUT Table @ ROM 0x2fad0, verified 2026-07: RequestID 0x01 -> RAM 0xf0f7]" />
-        <ActuatorListItem Display="EGR Solenoid Valve" RequestID="02" Notes="Cycles the EGR solenoid. [RAM CONFIRMED via Ghidra decompilation of adc_sensor_convert_single (0x171c3) + MUT Table @ ROM 0x2fad0, verified 2026-07: RequestID 0x02 -> RAM 0xf0fd]" />
-        <ActuatorListItem Display="Purge Control Solenoid" RequestID="03" Notes="Cycles the Evap Purge solenoid. [RAM CONFIRMED via Ghidra decompilation of adc_sensor_convert_single (0x171c3) + MUT Table @ ROM 0x2fad0, verified 2026-07: RequestID 0x03 -> RAM 0xf0fc]" />
-        <ActuatorListItem Display="Air Conditioning Relay" RequestID="04" Notes="Cycles the A/C clutch relay. [RAM CONFIRMED via Ghidra decompilation of adc_sensor_convert_single (0x171c3) + MUT Table @ ROM 0x2fad0, verified 2026-07: RequestID 0x04 -> RAM 0xf343]" />
-        <ActuatorListItem Display="Condenser Fan Relay - High" RequestID="05" Notes="Forces radiator/condenser fan to high speed. [RAM CONFIRMED via Ghidra decompilation of adc_sensor_convert_single (0x171c3) + MUT Table @ ROM 0x2fad0, verified 2026-07: RequestID 0x05 -> RAM 0xf363]" />
-        <ActuatorListItem Display="Condenser Fan Relay - Low" RequestID="06" Notes="Forces radiator/condenser fan to low speed. [RAM CONFIRMED via Ghidra decompilation of adc_sensor_convert_single (0x171c3) + MUT Table @ ROM 0x2fad0, verified 2026-07: RequestID 0x06 -> RAM 0xf361]" />
-        <ActuatorListItem Display="Ignition Timing Fix (5 deg BTDC)" RequestID="17" Notes="Locks timing to 5 degrees base for syncing physical distributor/cam angle sensor. [RAM CONFIRMED via Ghidra decompilation of adc_sensor_convert_single (0x171c3) + MUT Table @ ROM 0x2fad0, verified 2026-07: RequestID 0x17 -> RAM 0xf13d]" />
-        <ActuatorListItem Display="Idle Speed Control (ISC) Step Fix" RequestID="1A" Notes="Locks ISC stepper motor position to mid-way to adjust base idle screw (BISS). [RAM CONFIRMED via Ghidra decompilation of adc_sensor_convert_single (0x171c3) + MUT Table @ ROM 0x2fad0, verified 2026-07: RequestID 0x1A -> RAM 0xf1df]" />
+        <!-- ==================================================================
+             CORRECTED 2026-07-22: every row below previously carried a
+             "[RAM CONFIRMED ...]" note pointing at the Mode2/0x2fad0 MUT
+             read-table address for the SAME RequestID number -- e.g. RequestID
+             0x01 here was annotated with RAM 0xf0f7, which is actually the
+             Mode2 LoadMUT2Byte/gmas read address, not anything actuator-
+             related. That was a paste-across error: these Mode2 addresses
+             are for READING sensor/computed values via
+             adc_sensor_convert_single (0x171c3) + the table at ROM 0x2fad0,
+             a completely different mechanism from actuator control.
+
+             What IS independently confirmed on this ROM: a real command
+             dispatcher, sci1_meta_cmd_dispatch_c0_ff (ROM 0x28869), handles
+             command bytes 0xC0-0xFF and does genuine actuator-style direct
+             bit manipulation on RAM F516/F512/F510 (relay/solenoid trigger
+             flags). See mut_verification_status.md for the full trace.
+
+             What is NOT confirmed:
+             - Whether this ECU's SCI1 protocol actually has an EvoScan-style
+               "Mode 5 = actuator test" concept at all, versus simply routing
+               everything through the single command-byte dispatcher above
+               (<0xC0 = table read, 0xC0-0xFF = bit-manipulation dispatch).
+               "Mode 5" as a label was inherited from generic EvoScan/Evo
+               tooling convention, not independently derived from this ROM.
+             - Whether RequestID values 01/02/03/04/05/06/17/1A (as used
+               below) correspond to anything real on this ECU at all -- note
+               these values don't even fall in the confirmed dispatcher's
+               0xC0-0xFF range, so they may not map to ANY traced mechanism.
+             - Any real address, RAM location, or hardware mapping for what
+               these 8 rows are actually supposed to do.
+
+             Bottom line: treat every Display name and RequestID below as
+             UNVERIFIED/inherited-label-only. Do NOT send these on a real
+             vehicle without independent confirmation -- unlike the Mode2
+             rows (read-only, low risk), these are labeled as ACTUATOR
+             commands, and an unverified actuator command could trigger
+             unintended hardware action. This needs real tracing (find
+             sci1_meta_cmd_dispatch_c0_ff's actual case values, or determine
+             whether a genuine Mode-byte-then-RequestID scheme exists at all)
+             before any of these should be trusted or transmitted.
+             ================================================================== -->
+        <ActuatorListItem Display="Fuel Pump Relay (UNVERIFIED)" RequestID="01" Notes="UNCONFIRMED - address removed 2026-07-22. Previously wrongly annotated with the Mode2 RAM address for this RequestID number (0xf0f7), which is a sensor-read address, not an actuator control address. No real address or mechanism has been traced for this row. Do not trust or transmit without independent verification." />
+        <ActuatorListItem Display="EGR Solenoid Valve (UNVERIFIED)" RequestID="02" Notes="UNCONFIRMED - address removed 2026-07-22. Previously wrongly annotated with the Mode2 RAM address for this RequestID number (0xf0fd), a sensor-read address. No real address or mechanism has been traced for this row. Do not trust or transmit without independent verification." />
+        <ActuatorListItem Display="Purge Control Solenoid (UNVERIFIED)" RequestID="03" Notes="UNCONFIRMED - address removed 2026-07-22. Previously wrongly annotated with the Mode2 RAM address for this RequestID number (0xf0fc), a sensor-read address. No real address or mechanism has been traced for this row. Do not trust or transmit without independent verification." />
+        <ActuatorListItem Display="Air Conditioning Relay (UNVERIFIED)" RequestID="04" Notes="UNCONFIRMED - address removed 2026-07-22. Previously wrongly annotated with the Mode2 RAM address for this RequestID number (0xf343, part of the disputed AirFlowMUT2Byte pair), a sensor-read address. No real address or mechanism has been traced for this row. Do not trust or transmit without independent verification." />
+        <ActuatorListItem Display="Condenser Fan Relay - High (UNVERIFIED)" RequestID="05" Notes="UNCONFIRMED - address removed 2026-07-22. Previously wrongly annotated with the Mode2 RAM address for this RequestID number (0xf363, part of the disputed AirFlowMUT2Byte pair), a sensor-read address. No real address or mechanism has been traced for this row. Do not trust or transmit without independent verification." />
+        <ActuatorListItem Display="Condenser Fan Relay - Low (UNVERIFIED)" RequestID="06" Notes="UNCONFIRMED - address removed 2026-07-22. Previously wrongly annotated with the Mode2 RAM address for this RequestID number (0xf361, TimingAdv's real address), a sensor-read address. No real address or mechanism has been traced for this row. Do not trust or transmit without independent verification." />
+        <ActuatorListItem Display="Ignition Timing Fix (5 deg BTDC) (UNVERIFIED)" RequestID="17" Notes="UNCONFIRMED - address removed 2026-07-22. Previously wrongly annotated with the Mode2 RAM address for this RequestID number (0xf13d, TPS's real, independently-confirmed address) -- this collision is especially misleading since 0xf13d IS a real, solid address, just for a completely different (sensor-read) purpose. No real address or mechanism has been traced for this actuator row. Do not trust or transmit without independent verification." />
+        <ActuatorListItem Display="Idle Speed Control (ISC) Step Fix (UNVERIFIED)" RequestID="1A" Notes="UNCONFIRMED - address removed 2026-07-22. Previously wrongly annotated with the Mode2 RAM address for this RequestID number (0xf1df, Air Flow Hz's real address), a sensor-read address. No real address or mechanism has been traced for this row. Do not trust or transmit without independent verification." />
       </Mode5>
     </ecu>
   </vehicle>

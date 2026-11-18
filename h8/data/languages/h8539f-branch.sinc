@@ -129,6 +129,27 @@ absaddr24: "@"^addr24^":24" is addr24 { export *[const]:4 addr24; }
 # would have copied the dereferenced value, not the address - same flaw).
 # Fixed identically to :pjmp: raw addr24 token, zero-extended into a local
 # addr:4, then `call [addr];`.
+# INVESTIGATED 2026-07-30: this call [addr] is a genuine indirect call
+# (CALLIND) in pcode terms even though addr's value is compile-time-constant,
+# which is why table_lookup_interp's 130 callers all decompile as opaque
+# (*(code *)ADDR)() with zero bound arguments, despite literal pjsr calls with
+# literal pushed args in the real disassembly. Two direct-call alternatives
+# were tried and reverted:
+#   1. bare `call addr24;` (matching bsr's working call-by-bare-token
+#      pattern) -- fails to compile: "Could not resolve at least 1 variable
+#      size" (a plain :24 token used bare as a call target apparently isn't
+#      given a usable size by the compiler the way bsr's reloffs8 is).
+#   2. fixing absaddr24's export to a bare `export * addr24;` (matching
+#      h8520.slaspec's sibling grammar, which uses this shape successfully in
+#      its own :pjsr/:pjmp) -- fails to compile: "Table 'absaddr24' has
+#      inconsistent export size". h8520.slaspec itself is unverified/possibly
+#      never-compiled reference material (see review.md item 8), so this
+#      precedent doesn't hold here.
+# Root cause of the missing call-site argument binding is confirmed, but a
+# working direct-call fix has NOT been found yet. Needs a proper look at
+# Sleigh's requirements for constant call targets (likely needs an explicit
+# export shape sized to match the "ram" space's address width, not a value
+# load) before trying again -- do not retry the two approaches above as-is.
 :pjsr    "@"^addr24^":24"  is opcode_special=3; addr24
 {
     pcNext:4 = inst_next;
@@ -343,12 +364,15 @@ absaddr24: "@"^addr24^":24" is addr24 { export *[const]:4 addr24; }
 # "operand cc is undefined" from sleigh. Matching `cc` alongside `cond=0` is
 # fine: since `cc` is built from `cond`, constraining `cond=0` forces `cc` to
 # resolve deterministically to the "ra" production anyway.
-# NOTE: the 16-bit-displacement form below is NOT split out the same way.
-# `opcode47=3 & cond=0` does not collide with `rtd s8`: `rtd s8` is gated on
-# `opcode_special=0x14` (see its constructor above, per ana.cpp's
-# A2[0x14]=H8500_rtd), so the two do not share a byte.
+# NOTE: the 16-bit-displacement form is now split out the same way (2026-11-12).
+# Without this, bra:16 emitted `if (1) goto` (a CBRANCH), leaving a fall-through
+# edge that confused the decompiler's SP/stack-param tracking at merge points
+# (e.g. table_lookup_interp @1469a). `opcode47=3 & cond=0` does not collide with
+# `rtd s8`: `rtd s8` is gated on `opcode_special=0x14` (see its constructor above,
+# per ana.cpp's A2[0x14]=H8500_rtd), so the two do not share a byte.
 :b^cc      "#"^reloffs8^":8"    is   opcode47=2 & cond=0 & cc; reloffs8 { goto reloffs8; }
 :b^cc      "#"^reloffs8^":8"    is   opcode47=2 & cc; reloffs8 { if (cc) goto reloffs8; }
+:b^cc      "#"^reloffs16^":16"  is   opcode47=3 & cond=0 & cc; reloffs16 { goto reloffs16; }
 :b^cc      "#"^reloffs16^":16"  is   opcode47=3 & cc; reloffs16 { if (cc) goto reloffs16; }
 
 # ============================================================================

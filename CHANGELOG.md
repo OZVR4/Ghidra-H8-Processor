@@ -3,6 +3,152 @@
 All notable changes to the Ghidra H8/500 Processor Module are recorded here.
 
 ---
+### Changed - stackshift 0 on every h8539f.cspec prototype; Added - H8 Stack Purge Enforcer, No-stack and Call-graph modes, audit scripts (2026-11-11; work done 2026-11-02 to 2026-11-09)
+
+**stackshift="0" on every prototype in `h8539f.cspec`.** The H8 analyzers (`H8ExtraPopAnalyzer`, `H8FunctionPurgeAnalyzer`) store the whole pop of the
+return instruction as a function's stack purge (`rts` 2, `prts` 4, `rte` 6; the return address is included), and Ghidra
+computes a callee's extrapop as purge + the convention's stackshift. Every prototype used to have stackshift 2 or 4, so each
+call counted the return address twice and the decompiler's tracked SP rose by 2 or 4 per call. Result: `uStackNNNN = <return
+address>` stores in callers and phantom stack arguments. Measured on RVR 21000011 (741 functions, 1614 call sites, 0 decompile
+failures before and after): call sites with a return-address store 353 -> 0. The stack-origin call-argument count (233 -> 246) is
+not a good measure of phantom arguments and did not improve; that part is still open. The eight experiment prototypes
+(`__stdcall_ns0*`, `__stdcall_ns2*`) were removed on 2026-11-11 after checking that no function in the original ROM, `.hex.1`
+or `.hex.2` uses them; the file now has 26 prototypes, all stackshift 0. The generic `h8.cspec` (H8538F and H8520Max only) is
+unchanged: the analyzers only run on H8539F.
+
+**H8PurgeEnforcementAnalyzer** ("H8 Stack Purge Enforcer", last priority, enabled by default). Corrects a stored purge that differs
+from the return pop, but only for a function with no calls whose SP Ghidra's depth tracking shows balanced at every return;
+any other mismatch is only reported, with the evidence. Also warns once per run about any prototype with stackshift != 0.
+Five functions had wrong stored purges (`sat_add_s16`, `sat_sub_u16_clamp0`, `select_min_xy_triple`, `muldiv_u16_scaled`,
+`muldiv_s16_rounded_3op`: 12, 12, 16, 2, 2, all really 4); they are fixed in the Ghidra project copies (project data, not in
+git). Run by Ghidra's own analysis on the copy: `checked 719 functions: 719 correct, 0 corrected, 0 reported for review`.
+
+**No-stack mode and Call-graph mode in `H8PreservedRegsAnalyzer`** (both options off by default) with the new `H8StackReadTracker`
+and four prototypes `__stdcall_ns`, `_ns_pR1`, `_ns_pR2`, `_ns_pR1R2`. Call-graph mode also preserves R1/R2 in functions
+that never write them (real run on RVR 21000011: 693 set, 0 reverted; `extraout_R2` 228 -> 28, "Unknown calling convention"
+105 -> 1). No-stack mode gives convention variants without the stack input entry to functions that read no stack parameter
+(539 of 741 on RVR 21000011); it removed the 8 phantom stack arguments found at call sites, and it only became usable together
+with stackshift 0.
+
+**Audit scripts** in `ghidra scripts/measure/`: `CheckStackPurge.java` (read-only; run after the auto-analysis of any new ROM: prints
+prototypes with stackshift != 0, purge mismatches with evidence, mixed returns and a RESULT line) and `AfterRunCheck.java`.
+
+Removed from git: the seven stale `h8/build/classes/h8539f/*.class` files; `h8/build/` is now in `.gitignore`.
+Not yet verified: the whole chain on a freshly imported ROM (everything above was measured on a program whose purges the
+analyzers had already set), and the other four ROMs in the project (they cannot be opened without a database upgrade).
+See review32.md and todo.md.
+
+---
+### Added - H8PreservedRegsAnalyzer and R1/R2-preserving calling-convention clones (2026-10-30); hybrid R0-R5 displacement grammar and `funcptr align="1"` (2026-10-29)
+
+**H8PreservedRegsAnalyzer** (`h8/data/src/main/java/h8539f/`, packaged in `h8539f-analyzers.jar`). The cspec's conventions list
+R1 and R2 as killed by a call, but many ROM helpers (div_*, muldiv_*, mul_*, adc_*, ...) save them at entry (`stm` or
+`mov:g.w Rn,@-SP`) and restore them before every return, so callers printed `extraout_R2` and junk base addresses after the
+call. The analyzer finds those functions and switches each to a clone of its current convention, `<base>_pR1`, `_pR2` or
+`_pR1R2`, which is identical except that those registers move from `killedbycall` to `unaffected`. The 15 clones are defined
+at the end of `h8539f.cspec`. Conservative by design: never changes anything but those registers, skips unknown base
+conventions and missing clones, records a bookmark ("H8 Preserved Registers") with the saved/restored instructions for
+every function it changes, reverts a function on re-analysis if the evidence no longer holds, has a "Dry run" option, and
+is **disabled by default** (enable it in Analysis > Auto Analyze). Measured on RVR 21000011 with a fresh parse (305 of 741
+functions switched): `extraout_R2` 307 -> 230, `undefined*` 1574 -> 1534, `&stack0x` 20 -> 7, stack-array declarations
+9 -> 4, `unaff_*` 123 -> 167 (mostly R1/R2 inputs now named `unaff_`), no new decompile failures. Remaining junk base
+addresses: 3 in `mut_configurable_reqid_periodic_snapshot_8word` plus 1 each in three other functions. Not tested:
+the revert path and the dry-run option. See review29.md.
+
+**Hybrid R0-R5 displacement grammar and `funcptr align="1"`.** See NOTES.TXT (2026-10-29) and review29.md.
+
+---
+
+### Added — AXIS-AMBIGUOUS / PAIRED-AMBIGUOUS status tiers in the axis-pairing checkers
+
+`find_preceding_axis_call()` in both `h8539_import_tables_xml2.py` and `h8539_audit_axis_data_length.py`
+(two independent copies, kept in sync) now walks the full backward window instead of stopping at the
+first match, and detects whether a second, different `axis_lookup_interp` call also precedes the table
+call within the same window. Return shape changed from `(imm, steps)` to
+`(imm, steps, other_axis_calls_count)`.
+
+New status tiers: `verify_table_pairing()` (importer) now reports `PAIRED-AMBIGUOUS` — a real axis call
+was found, but a different one was also found earlier in the walk — bookmarked as
+`H8539F-TABLE-PAIRED-AMBIGUOUS`. `audit_table()` (standalone length auditor) reports the equivalent
+`AXIS-AMBIGUOUS`, checked before the length-mismatch check since axis identity uncertainty is more
+fundamental than a length match against a possibly-wrong axis. `PAIRED-AMBIGUOUS` tables also now run
+`convention_b_writer_check` — only clean, unambiguous `PAIRED` tables skip that follow-up.
+
+A table can now land in any of: `NO-CALLER`, `NO-AXIS-CALL`, `AXIS-AMBIGUOUS`, `LENGTH-UNVERIFIED`,
+`LENGTH-MATCH`. Confirmed via a live run: several previously "cleanly PAIRED" tables (e.g.
+`TABLE_2D_00012858_ISC`, `Barometric Pressure Compensation`, multiple Knock Sensor Filter Maps) turned
+out to have a second candidate axis call nearby and are now correctly flagged ambiguous rather than
+over-classified as confirmed.
+
+### Fixed — status wording overclaimed on axis-length mismatches ("LENGTH-MISMATCH" → "LENGTH-UNVERIFIED")
+
+A shared axis is frequently longer than an individual table's data span by design (e.g. an 18-point
+axis spanning 0-11000 RPM shared by several tables, where an idle-related table only needs 0-4000 RPM)
+— normal ECU calibration practice, not corruption. The old `LENGTH-MISMATCH` status in
+`h8539_audit_axis_data_length.py`'s `audit_table()` and the `DATA-OFFSET` status in
+`h8539_import_tables_xml2.py`'s `verify_xml_axis()` were worded as if this always indicated a
+wrong/broken XML value ("the claimed END of the axis data is wrong"). There is no ROM-format field
+declaring which subset of a shared axis's breakpoints a shorter table corresponds to, so neither script
+can actually confirm which side (ROM's declared count vs XML's claimed length) is wrong, if either is —
+a genuine detection limitation, not proof of a bug.
+
+Renamed `LENGTH-MISMATCH` → `LENGTH-UNVERIFIED` throughout `h8539_audit_axis_data_length.py`
+(classification logic, print output, summary line); detail text now explicitly notes this may be
+legitimate partial-axis coverage. Also now separately flags when `measured_len > axis_count` (more
+table entries than axis breakpoints) as the one direction that IS structurally suspicious, since more
+entries than breakpoints to index them can't be legitimate partial coverage. `verify_xml_axis()`'s two
+`DATA-OFFSET` return sites reworded the same way. The same caveat was noted as applying to the axis
+address itself, not just its length — `find_preceding_axis_call()` only confirms a real
+`axis_lookup_interp` call precedes the table call, not that it's the semantically-correct axis for that
+table if more than one axis call exists in the function; addressed by the AXIS-AMBIGUOUS/PAIRED-AMBIGUOUS
+tiers above.
+
+### Fixed — `read_axis_count()` double-counted ROM_BASE in axis address formula
+
+`h8539_audit_axis_data_length.py`'s `read_axis_count()` computed
+`full = 0x00010000 + (AXIS_BANK * 0x10000) + (axis_offset_bare & 0xFFFF)`, double-counting ROM_BASE on
+top of the bank multiply. For a confirmed-good axis record (`isc_openloop_target_calc`'s push of
+bank=2, offset=0xd7ca), the old formula computed 0x3d7ca, which has no backing memory block in this
+program. Corrected to `full = (AXIS_BANK * 0x10000) + (axis_offset_bare & 0xFFFF)`, verified against the
+same record (0x2d7ca), which reads back a clean, sane `axis_lookup_interp` record (value_ptr=F0C0,
+axis_ptr=EF6A, axis_count=5, monotonic breakpoints). Independently corroborated by the H8/500
+far-address encoding in the IDA SDK reference (`ana.cpp` line 344,
+`insn.Op1.addr = (page<<16) | insn.get_next_word();`) and by the project's own `spSegment` SLEIGH
+segmentop pcode body (`res = (zext(base) << 16) | zext(inner);`) — three independent confirmations of
+the same `bank*0x10000+offset` arithmetic.
+
+Checked `h8539_import_tables_xml2.py`'s `verify_table_pairing`/`find_table_call_sites`/
+`find_preceding_axis_call` for the same bug: clean, no equivalent issue exists there since that script
+never resolves a full address, only compares the raw `(bank, imm)` tuple against `TABLE_BANK`/
+`AXIS_BANK` constants.
+
+An early version of the follow-up script `h8539_find_convention_b_writers.py` had the same ROM_BASE
+double-counting bug (computed `addr(value_ptr)`, adding ROM_BASE a second time, instead of the bare RAM
+address). Fixed, and every run now also removes any stale bad xref left by the old buggy version before
+creating the correct one — confirmed via `get_xrefs_from` that the bad `0001xxxx`-prefixed xrefs are
+gone and only correct `0000xxxx`-prefixed ones remain, for both originally-affected tables (0x11e94,
+0x127d8).
+
+### Added — `resolve_header_address()` two-convention header resolution in `h8539_import_tables_xml2.py`
+
+This ROM's XML uses two different addressing conventions for 2D/3D table headers and nothing in the
+XML itself says which one a given entry follows: Convention A ("address = header") — the XML address
+IS the header byte (mode + RAM pointer(s)) directly, confirmed the common case via live memory reads
+(e.g. "Knock Control Above Load" @0x12832 → `02 00 F0 C4`). Convention B ("address = data, header is
+`hdr_size` bytes earlier") — the XML address is the data start and the real header sits `hdr_size`
+bytes before it; this is the convention the script originally assumed unconditionally.
+
+Since `header_shape_ok()` is a real, independent positive-evidence check (mode byte + in-RAM pointer
+verified against live ROM bytes, not guessed), `resolve_header_address()` now tries both candidate
+addresses and returns whichever one actually passes `header_shape_ok()` on this ROM, rather than
+assuming one convention for every table in the file. Returns `(header_int, convention_label)` where
+`convention_label` is `"header-at-xml-addr"`, `"header-before-xml-addr"`, or `"unresolved"` (neither
+candidate passed the check — caller falls back to the old default guess and lets the normal
+SUSPECT/REJECTED logic report the uncertainty, rather than silently typing a wrong header). Some tables
+genuinely use neither flat convention (the "header-record indirection" case, e.g. some Ignition Map and
+ISC tables) — for those, `"unresolved"` is the correct, honest result, not a bug.
+
+---
 ### fixed the badspace error in c output
 
 The compiler did not track the stack variables properly so the c output was
@@ -20,8 +166,85 @@ short of the MUT table itself (absolute 0x2FAD0). There is no real page-2 scan g
 stale leftovers, corrected to describe the actual scan range. If page-2 tables still turn up
 unlabeled, the cause is a byte-signature mismatch, not an unreached region. review.md's item 2
 has been updated to drop this as a resolved item; the README's matching "page 1 only" wording
-still needs a separate check.
-## [Unreleased]
+still needs a sepa## [U### Fixed — Idle Stepper Look-up Table XML address pointed at header, not data grid (12992 -> 1299a)
+
+The EcuFlash XML's "Idle Stepper Look-up Table" / "Idle Stepper Lookup Table" entries
+(both duplicate definitions, `21000011_1997-2001_RVR_X3_Mt__4g63t_.xml`) declared
+`address="12992"`, matching what EcuFlash itself reports in its Edit Table Metadata
+dialog and consistent with the axis addresses (Coolant Temp `2d4c0`/8 elements, ISCV
+Demand `2d4d6`/27 elements). Despite the address/axis metadata being internally
+consistent, opening the table in EcuFlash showed a garbled first row
+(`3, 0, 240, 192, 240, 194, 8, 0`) against an otherwise clean, monotonic ISCV-steps
+surface starting from row 2 onward.
+
+Root-caused by disassembling `idle_stepper_table_lookup_wrapper` (0x268e2), the real
+caller of `table_lookup_interp` for this table: the literal pointer pushed before the
+call is `#0x2992` (bank-relative, resolves to physical `0x12992`), while the two
+preceding axis-setup calls push `#0xd4ba` and `#0xd4d0` — which, once bank-adjusted,
+resolve to `0x2d4ba`/`0x2d4d0`, six bytes before the XML's declared axis addresses
+(`2d4c0`/`2d4d6`). Reading raw ROM bytes at `0x2d4ba` confirmed those six leading
+bytes are `F0 C0 F1 0E 00 08` — i.e. a 4-byte header (two live RAM pointers, `0xf0c0`
+and `0xf1(0)e`-shaped) immediately followed by the real axis array starting at `2d4c0`
+as declared. The exact same header shape (`03` mode byte + RAM pointers `0xf0c0`/
+`0xf0c2`) is what's actually stored at `0x12992` — an 8-byte runtime lookup-context
+header, not table data — which is why EcuFlash was rendering it as a bogus first row.
+
+The real 8x27 (216-byte) ISCVSteps data grid starts 8 bytes later, at `0x1299a`,
+confirmed by direct ROM read: a clean, monotonic surface (`0,0,...,10x8,20x8,30x8...`
+ramping smoothly up to a `160`-clamped ceiling) terminating in a `0xFF` sentinel byte
+with no overrun into neighboring tables. Both XML entries corrected to
+`address="1299a"`. See review.md item 17 for the fuller trace and the caution this
+raises about the file's other `type="3D"` (EcuFlash-convention 2D bilinear) table
+addresses, none of which have been individually re-verified against their real
+calling code yet.
+
+### Fixed — `bankifyDP` macro converted to `spSegment` pcodeop, eliminating most DP-banked CONCAT12 decompiler noisecompiler noise
+
+`bankifyDP` (h8539f.slaspec ~line 436) previously inlined `(zext(DP) << 16) | zext(reg)`
+as raw pcode at every call site — `disp8_banked`/`disp16_banked`/`Rn_banked`/`Rs_banked`/
+`Rn_banked2`/`eab_predec`/`eab_postinc`/`eaw_predec`/`eaw_postinc` for R0–R3, ~31 sites total
+from the earlier bankify-macro pilot. Because that's literally "concatenate a 1-byte value
+with a 2-byte value," Ghidra's decompiler correctly rendered every one of those call sites as
+`CONCAT12(DP, reg)` — not a bug, just the most honest printout of that exact pcode shape.
+
+Fixed by having `bankifyDP` call the existing `spSegment` pcodeop instead (`result =
+spSegment(DP, reg);`), reusing the same `<segmentop space="ram" userop="spSegment">`
+already declared in h8539f.pspec for EP/TP/FP/SP (review.md item 9, steps 1-3b). DP is not
+added to `<constresolve>` -- Ghidra only allows one fully-resolved register per address space
+and TP already holds that slot -- so this doesn't constant-fold DP=0/1 the way the old inline
+zext pattern did, but it's a real segmented pointer, not an opaque CALLOTHER, and it stops
+emitting CONCAT12 at every DP-banked callsite. Exact same tradeoff already proven safe for
+EP in step 3b.
+
+Verified via full ROM-wide before/after decompile diff (`md352553.hex.c` vs
+`md352553_fix2.hex.c`, RVR_1998_x3 4g63t 21000011):
+- `CONCAT` total: 315 -> 77 (-238)
+- `WARNING:` count: 644 -> 644 (unchanged -- no new decompiler warnings anywhere)
+- `extraout_`: 509 -> 509 (unchanged -- expected, different bug class, review.md item 10)
+- `unaff_`: 89 -> 83 (-6, bonus cleanup)
+
+Compiled clean (`sleigh.bat`, exit 0, only pre-existing WARN lines), full file set copied to
+the Ghidra install (.sla/.pspec/.cspec/.slaspec/all .sinc, timestamps verified matching),
+reload done, before/after diff confirms no regressions.
+
+**Not fully closed**: 77 CONCATs remain (18 CONCAT12 + 44 CONCAT11 + 15 CONCAT22), suspected
+to trace to the separate `addr16_dp` construct (h8539f.slaspec ~line 506), which has its own
+independent inline `(zext(DP) << 16) | (addr16)` that never went through `bankifyDP` at all.
+Not yet confirmed or fixed -- see review.md's new tracked item.
+
+### Investigated -- remaining CONCAT sites (addr16_dp theory ruled out; item closed as done)
+
+Follow-up same day: traced all 77 remaining CONCATs to their real sources. `addr16_dp` turned
+out NOT to be involved -- it's live in the grammar but operates on a compile-time literal, and
+isn't exercised by this ROM's code. The actual sources: CONCAT12 (18) is 24-bit far-call
+pointer reconstruction from jump-table bytes -- inherent to the compiler's jump-table encoding,
+not a grammar bug, and several of those functions already carry pre-existing in-source warnings
+(dated 2026-07-15) marking their decompile as untrustworthy. CONCAT22 (15) splits between
+genuine 32-bit division dividend/remainder math (~10) and `byte_sum_banked` calls using a
+separate Rs32/Rn32 register-pair pointer construct unrelated to DP banking (~5). CONCAT11 (44)
+is all byte-pair-to-word math in fixed-point/multiply/division helpers. None require a SLEIGH
+grammar fix -- this closes out the CONCAT cleanup effort; see review.md item 14 for full detail.
+ [Unreleased]
 
 ### Added — `H8FunctionPurgeAnalyzer`: stack-purge-size analyzer for `prtd`/`rtd`
 

@@ -1,0 +1,813 @@
+<rom>
+	<romid>
+		<xmlid>21000011</xmlid>
+		<internalidaddress>1021a</internalidaddress>
+		<internalidhex>21000011</internalidhex>
+		<caseid>MD352553</caseid>
+		<ecuid>EM2171</ecuid>
+		<make>Mitsubishi</make>
+		<market>JDM</market>
+		<model>RVR</model>
+		<submodel>X3</submodel>
+		<transmission>5-MT</transmission>
+		<year>1997/2001</year>
+		<flashmethod>mitsukernel</flashmethod>
+		<memmodel>H8539F</memmodel>
+	</romid>
+
+	<include>RVRbase</include>
+	<notes>2012/11/19 [Tactrix] Updated to standardized file naming.
+2024 [Analysis] Corrected and extended table definitions from ROM binary analysis.
+2025 [Ghidra] Reclassified 4x "Unknown Early 3D [f3a8/f3aa]" tables from Unknown/fuel-injector-guess to Transmission/TCU, based on confirmed disassembly tracing (see tcu_torque_target_ramp_calc, tcu_slip_control_init, tcu_rx_main_scheduler). Axis scaling for these 4 tables is still tentative only the subsystem identity changed.
+2026-07 [Ghidra, session 3] RECLASSIFIED AGAIN, superseding the 2025 entry above: all 10 tables in the f3a8/f3aa/f3ac/f3ae/f3b0/f3b2 cluster (the 4 "TCU Torque Ramp Target" tables + the 6 "Open Loop Lambda ..." tables) are confirmed to be a single SHARED "Knock-to-TCU Torque Coordination" register group, category changed to Knock Control. Confirmed via matching enable-condition disassembly in both tcu_rx_main_scheduler and knock_process_main (identical RAM 0xf1f2 bit7 gate). This was checked specifically to rule out address aliasing/misidentification - see logging.txt session 3 "0xF3AC/0xF3AE CONFLICT - CONFIRMED INTENTIONAL" for the full resolution. Table names updated in place; old "Lambda ..." names kept parenthetically for continuity with prior tuning notes. Treat the AFR/uint8 scaling on the ex-Lambda tables as SUSPECT pending further work - the dual TCU/knock interpretation of the same bytes is confirmed, but which (if either) numeric scaling is correct is not yet resolved.
+2026-07 [Ghidra, session 4] Octane Level (MUT 0x27, RAM 0xEEC8/EEC9) decay-vs-knock mechanism confirmed and documented in RVR_base.xml's shared notes section - this is the "knock retard" equivalent on this ECU (no discrete retard-degrees value exists). See RVR_base.xml notes and logging.txt session 4 for full detail.
+ROM ID: 21 00 00 11 at file offset 0x021A. XML address = file_offset + 0x10000.
+Key axes confirmed from ROM data:
+RPM axis @2d2b0: 500-7000 RPM (14 elem), @2d332: 0-11000 RPM (18 elem)
+Load axis @2d308: 10-260% (18 elem), @2d382: 0-260% (19 elem)
+Temp axis @2d418: -32 to 82C (8 elem), @2d42e: -32 to 82C (9 elem)
+Battery axis @2d27a: 9.4-18.7V (9 elem)
+Boost Error axis @2d59c: -20 to +17.5% (16 elem)
+Ignition maps confirmed: signed byte = degrees, rows=RPM cols=Load
+Fuel maps confirmed: AFR = 14.7*128/x (stoichiometric = 0x80 = 14.7 AFR)
+</notes>
+
+	<table name="Auto/Manual Selection Code (Address AAF)" category="Transmission" address="10aaf" type="1D" level="2" scaling="Hex8"/>
+
+	<table name="Unknown Table 11daa" category="Fuel" address="11daa" type="2D" level="2" scaling="uint8">
+		<table name="Engine Temp" address="2d42e" type="X Axis" elements="9" scaling="Temp"/>
+	</table>
+
+	<table name="Unknown Table 11db8" category="Fuel" address="11db8" type="2D" level="2" scaling="uint8">
+		<table name="Engine Temp" address="2d42e" type="X Axis" elements="9" scaling="Temp"/>
+	</table>
+
+	<table name="Open Loop Load # 1" category="Fuel" address="11d28" type="2D" level="2" scaling="Load8">
+		<table name="RPM" address="2d0a0" type="Y Axis" elements="16" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011834_Knock (possible: Knock/Lambda Composite Correction)" category="Unknown" address="11838" type="2D" scaling="uint8">
+		<table name="RPM" address="2d21e" type="Y Axis" elements="7" scaling="RPM"/>
+		<!-- 2026-08-16: reverted to elements="7" after PJ caught the mistake -- the shared axis
+		     header at 2d218 (hdr_maf_hz_raw) declares 21 elements total, but this table's OWN 2D
+		     data body at 11838 only has 7 real bytes (34 41 2d 31 36 3b 45 = 34,41,45,49,54,59,69)
+		     before a 0xFF terminator and the next table's header (03 00 F0C0 F0C2 09...) begin.
+		     Confirmed via direct ghidra:read_memory at 0x11838. This table uses only the first 7
+		     breakpoints of the shared 21-element MAF Hz raw axis -- elements must match the DATA
+		     body length, not the full axis header count. Scaling name left as "RPM" pending
+		     confirmation of whether it's really RPM or a partial MAF-axis reuse -- not re-verified
+		     this pass, only the element-count regression was fixed. -->
+	</table>
+
+	<table name="TABLE_2D_0001186C_Fueling (possible: Base Injection Fueling - blend component)" category="Unknown" address="11870" type="2D" scaling="uint8">
+		<table name="RPM" address="2d0f6" type="Y Axis" elements="16" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011880_Fueling (possible: Base Injection Fueling)" category="Unknown" address="11884" type="2D" scaling="uint8">
+		<table name="RPM" address="2d0f6" type="Y Axis" elements="16" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011894_Fueling (possible: Base Injection Fueling - sibling)" category="Unknown" address="11898" type="2D" scaling="uint8">
+		<table name="RPM" address="2d0f6" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_000118A0_Fueling" category="Unknown" address="118a4" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="15" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011D4C_CounterReset" category="Unknown" address="11d50" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="18" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011DEC_O2Mode11 (possible: O2 Mode 11 Correction)" category="Unknown" address="11df0" type="2D" scaling="uint8">
+		<table name="RPM" address="2d266" type="Y Axis" elements="7" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011E4A_TableLookup" category="Unknown" address="11e4e" type="2D" scaling="uint8">
+		<table name="RPM" address="2d136" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011E6A_ThresholdLookup (possible: Threshold Lookup / Gate Table)" category="Unknown" address="11e6e" type="2D" scaling="uint8">
+		<table name="RPM" address="2d446" type="Y Axis" elements="11" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011E86_CompositeCorr" category="Unknown" address="11e8a" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="9" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011E94_CompositeCorr" category="Unknown" address="11e98" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011EA0" category="Unknown" address="11ea4" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="18" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011EC8_CompositeCalc" category="Unknown" address="11ecc" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="10" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011ED6_CompositeCalc" category="Unknown" address="11eda" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011EE2_CompositeCalc" category="Unknown" address="11ee6" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="11" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011F16_CompositeCorr" category="Unknown" address="11f1a" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011F30_CompositeCorr" category="Unknown" address="11f34" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011F3C_CompositeCorr" category="Unknown" address="11f40" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011F4A_CompositeCorr" category="Unknown" address="11f4e" type="2D" scaling="uint8">
+		<table name="AirTemp_raw_F0C6_UNCONFIRMED" address="f0c6" type="Y Axis" elements="14" scaling="raw"/>
+	</table>
+
+	<table name="TABLE_2D_00011F5C_CompositeCorr" category="Unknown" address="11f60" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="0" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00011F64_HysteresisTimer" category="Unknown" address="11f68" type="2D" scaling="uint8">
+		<table name="RPM" address="2d2b0" type="Y Axis" elements="0" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_000127D8_ISC" category="Unknown" address="127dc" type="2D" scaling="uint8">
+		<table name="IAT_raw_F0D0_UNCONFIRMED" address="f0d0" type="Y Axis" elements="7" scaling="raw"/>
+	</table>
+
+	<table name="TABLE_2D_000127FC_ISC" category="Unknown" address="12800" type="2D" scaling="uint8">
+		<table name="RPM" address="2d496" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012824_ISC" category="Unknown" address="12828" type="2D" scaling="uint8">
+		<table name="RPM" address="2d27a" type="Y Axis" elements="9" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_0001284E_ISC" category="Unknown" address="12852" type="2D" scaling="uint8">
+		<table name="RPM" address="2d186" type="Y Axis" elements="6" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012858_ISC" category="Unknown" address="1285c" type="2D" scaling="uint8">
+		<table name="RPM" address="2d2a2" type="Y Axis" elements="4" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012860_ISC" category="Unknown" address="12864" type="2D" scaling="uint8">
+		<table name="RPM" address="2d2a2" type="Y Axis" elements="4" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_0001286C_ISC" category="Unknown" address="12870" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="10" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_000128D2_ISC" category="Unknown" address="128d6" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_000128DE_ISC" category="Unknown" address="128e2" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_000128EA_ISC" category="Unknown" address="128ee" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012950_ISC" category="Unknown" address="12958" type="2D" scaling="uint8">
+		<table name="RPM" address="2d200" type="Y Axis" elements="5" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_0001297A_Trim" category="Unknown" address="1297e" type="2D" scaling="uint8">
+		<table name="CoolantTempB_raw_F0C8_UNCONFIRMED" address="f0c8" type="Y Axis" elements="8" scaling="raw"/>
+	</table>
+
+	<table name="TABLE_2D_00012986_O2Mode78 (possible: O2 Mode 7/8 Correction - first table)" category="Unknown" address="1298a" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012AE6" category="Unknown" address="12aee" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="9" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_3D_00012B06_CanisterPurge" category="Unknown" address="12b0d" type="3D" scaling="uint8">
+		<table name="RPM" address="2d536" type="X Axis" elements="15" scaling="RPM"/>
+		<table name="RPM" address="2d512" type="Y Axis" elements="9" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_3D_00012B94_ISC" category="Unknown" address="12b9b" type="3D" scaling="uint8">
+		<table name="RPM" address="2d332" type="X Axis" elements="18" scaling="RPM"/>
+		<table name="RPM" address="2d35c" type="Y Axis" elements="16" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012CBC_TCU" category="Unknown" address="12cc0" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="18" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012CD2_TCU" category="Unknown" address="12cd6" type="2D" scaling="uint8">
+		<table name="RPM" address="2d54e" type="Y Axis" elements="17" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012CE8_CanisterPurge" category="Unknown" address="12cec" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012CF4_ISC" category="Unknown" address="12cf8" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012D00" category="Unknown" address="12d04" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="18" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012D70_O2Load" category="Unknown" address="12d78" type="2D" scaling="uint8">
+		<table name="RPM" address="2d0a0" type="Y Axis" elements="16" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012DD6_O2Heater" category="Unknown" address="12dda" type="2D" scaling="uint8">
+		<table name="RPM" address="2d11c" type="Y Axis" elements="10" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012DE4_ISC" category="Unknown" address="12de8" type="2D" scaling="uint8">
+		<table name="RPM" address="2d5f4" type="Y Axis" elements="9" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_3D_00012DF2" category="Unknown" address="12df9" type="3D" scaling="uint8">
+		<table name="RPM" address="2d60c" type="X Axis" elements="10" scaling="RPM"/>
+		<!-- 2026-08-14 [Ghidra] Confirmed Load: header 2d620 (out-ptr F0C2, in-ptr F190), data
+		     48,64,80,96,128,160,192,224 -> Load scaling (x*10/32) = 15,20,25,30,40,50,60,70%,
+		     clean breakpoints. Shared axis, same fix applied to TABLE_3D_00012E4A. -->
+		<table name="Load" address="2d626" type="Y Axis" elements="8" scaling="Load"/>
+	</table>
+
+	<table name="TABLE_3D_00012E4A" category="Unknown" address="12e51" type="3D" scaling="uint8">
+		<table name="RPM" address="2d60c" type="X Axis" elements="10" scaling="RPM"/>
+		<!-- 2026-08-14 [Ghidra] Confirmed Load: header 2d620 (out-ptr F0C2, in-ptr F190), data
+		     48,64,80,96,128,160,192,224 -> Load scaling (x*10/32) = 15,20,25,30,40,50,60,70%,
+		     clean breakpoints. Shared axis, same fix applied to TABLE_3D_00012DF2. -->
+		<table name="Load" address="2d626" type="Y Axis" elements="8" scaling="Load"/>
+	</table>
+
+	<table name="TABLE_2D_00012EA2_EGR" category="Unknown" address="12ea6" type="2D" scaling="uint8">
+		<!-- 2026-08-14 [Ghidra] Confirmed Load: header 2d620 (out-ptr F0C2, in-ptr F190), data
+		     48,64,80,96,128,160,192,224 -> Load scaling (x*10/32) = 15,20,25,30,40,50,60,70%,
+		     clean breakpoints. Shared axis, same fix applied to TABLE_3D_00012DF2/E4A. -->
+		<table name="Load" address="2d626" type="Y Axis" elements="8" scaling="Load"/>
+	</table>
+
+	<table name="TABLE_2D_00012EAE_EGR" category="Unknown" address="12eb2" type="2D" scaling="uint8">
+		<!-- 2026-08-14 [Ghidra] Confirmed Load: header 2d620 (out-ptr F0C2, in-ptr F190), data
+		     48,64,80,96,128,160,192,224 -> Load scaling (x*10/32) = 15,20,25,30,40,50,60,70%,
+		     clean breakpoints. Shared axis, same fix applied to TABLE_3D_00012DF2/E4A. -->
+		<table name="Load" address="2d626" type="Y Axis" elements="8" scaling="Load"/>
+	</table>
+
+	<table name="TABLE_2D_00012EBC_ISC" category="Unknown" address="12ec0" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="10" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012ECE_ThresholdSelect" category="Unknown" address="12ed2" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="10" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012EDC_ThresholdSelect" category="Unknown" address="12ee0" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="10" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012EEA_ThresholdSelect" category="Unknown" address="12eee" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="10" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012EF8_ThresholdSelect" category="Unknown" address="12efc" type="2D" scaling="uint8">
+		<table name="RPM" address="2d63c" type="Y Axis" elements="10" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012F06_TCU" category="Unknown" address="12f0a" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="10" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_00012F14_TCU" category="Unknown" address="12f18" type="2D" scaling="uint8">
+		<table name="RPM" address="2d63c" type="Y Axis" elements="10" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_0001313E_TCU" category="Unknown" address="13142" type="2D" scaling="uint8">
+		<table name="RPM" address="2d670" type="Y Axis" elements="10" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_000131D4_DualChannel" category="Unknown" address="131d8" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="8" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_3D_000131FA_TCU" category="Unknown" address="131fa" type="3D" scaling="uint8">
+		<!-- 2026-08-14 [Ghidra] Axes discovered from scratch (previously empty). Caller
+		     tcu_shift_solenoid_table_init (0x2ba7f): every table_lookup_interp(1, 0x31fa) call
+		     is immediately preceded by axis_lookup_interp(2, 0x2d636) then axis_lookup_interp(2,
+		     0x2d650) - confirmed at 3 separate call sites in the disassembly (0x2ba79/0x2bb09/
+		     0x2bb53 gated branches). -->
+		<!-- Axis1: header 2d636 (out-ptr F0C0=RPM, in-ptr F170), 10 elements, data
+		     128,256,384,512,640,768,1024,1280,1536,1792 -> RPM scaling (x*1000/256) =
+		     500,1000,1500,2000,2500,3000,4000,5000,6000,7000, clean. -->
+		<table name="Axis1 (RPM)" address="2d63c" type="X Axis" elements="10" scaling="RPM"/>
+		<!-- Axis2: header 2d650 (out-ptr F0C2, in-ptr F196), 10 elements, data
+		     64,96,128,160,192,256,320,384,448,512. Neither existing Load (x*10/32, tops at 160%)
+		     nor Load16 (x*5/8, tops at 320%) fit - both overshoot 100%. New "TCULoad" scaling
+		     (x*100/512) added to RVRbase.xml 2026-08-14: clean proportional 12.5,18.75,25,31.25,
+		     37.5,50,62.5,75,87.5,100%, ending exactly at 100. Cross-checked against a real VR4
+		     5-AT TCU ROM's own XML: its shift tables pair vehicle speed with a Throttle Position
+		     axis (Throttle%16, x*100/255), not Load - so despite the F0C2 pointer matching the
+		     Fuel-side "Load" convention, this is very likely throttle%, not engine load. Renamed
+		     accordingly; scaling formula (x*100/512) kept as-is since it's the correctly-scaled
+		     16-bit equivalent of the VR4's 8-bit Throttle%16. -->
+		<table name="Axis2 (TCU Throttle %, possible)" address="2d656" type="Y Axis" elements="10" scaling="TCULoad"/>
+	</table>
+
+	<table name="TABLE_2D_0001327A" category="Unknown" address="13282" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="18" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_2D_000132F8" category="Unknown" address="132fc" type="2D" scaling="uint8">
+		<table name="RPM" address="2d332" type="Y Axis" elements="18" scaling="RPM"/>
+	</table>
+
+	<table name="TABLE_3D_00011DC9_O2Mode7_8Correction (possible: Lean Spool Load)" category="Fuel" address="11dc9" type="3D" level="2" swapxy="true" scaling="uint8">
+		<!-- 2026-08-14 [Ghidra] Confirmed RPM: header 2d3ee (out-ptr F0C0=RPM, in-ptr F170), data
+		     128,256,512,768,1024 -> RPM scaling (x*1000/256) = 500,1000,2000,3000,4000, clean coarse
+		     breakpoints. Caller f0ba_f2d0_o2_mode7_8_correction_calc (0x24319) matches table name.
+		     axis_lookup_interp (0x14735) does no internal scaling, confirming axis values must be in
+		     the same raw units as the RPM RAM cell - standard RPM scaling applies. See review12.md. -->
+		<table name="Axis1 (RPM)" address="2d3f4" type="X Axis" elements="5" scaling="RPM"/>
+		<!-- 2026-08-14 [Ghidra] Confirmed Load: header 2d3fe (out-ptr F0C2, in-ptr F0BA), data
+		     33,65,97,129,161,193,225 -> Load scaling (x*10/32) = 10.3-70.3%, clean linear ~10% steps.
+		     Identical data pattern to the already-confirmed "Engine Load" axis (review12.md batch-1),
+		     and cross-ROM verified against EVO5 (2c884->2c88a, identical values). -->
+		<table name="Axis2 (Load)" address="2d404" type="Y Axis" elements="7" scaling="Load"/>
+	</table>
+
+	<table name="MAF Scaling" category="Air" address="11804" type="2D" level="3" scaling="AirFlow8">
+		<table name="Load (MAF Hz raw)" address="2d21e" type="Y Axis" elements="21" scaling="uint16"/>
+	</table>
+
+	<table name="MAF Smoothing Table" category="Air" address="1181e" type="2D" level="3" scaling="AirFlow8">
+		<table name="Load (MAF Hz raw)" address="2d21e" type="Y Axis" elements="21" scaling="uint16"/>
+	</table>
+
+	<table name="Air Temperature Compensation" category="Fuel" address="11d7e" type="2D" level="2" scaling="Enrich">
+		<table name="Air Temp" address="2d4ac" type="X Axis" elements="7" scaling="Temp"/>
+	</table>
+
+	<table name="Barometric Pressure Compensation" category="Air" address="11847" type="3D" level="3" swapxy="true" scaling="BoostBar">
+		<table name="Atmosphere Pressure" address="2d210" type="X Axis" elements="4" scaling="Load16"/>
+		<table name="RPM" address="2d24e" type="Y Axis" elements="9" scaling="RPM"/>
+	</table>
+
+	<table name="MAF Sensor Filtering" category="Air" address="1080c" type="2D" level="3" scaling="uint16">
+		<table name="Load" type="Static Y Axis" elements="2">
+			<data>Hi</data>
+			<data>Lo</data>
+		</table>
+	</table>
+
+	<table name="MAF Size" category="Air" address="10810" type="1D" level="3" scaling="AirFlow16"/>
+
+	<table name="High Octane Fuel Map" category="Fuel" address="118bb" type="3D" level="3" swapxy="true" scaling="AFR">
+		<table name="Load" address="2d308" type="X Axis" elements="18" scaling="Load"/>
+		<table name="RPM" address="2d2b0" type="Y Axis" elements="14" scaling="RPM"/>
+	</table>
+
+	<table name="Low Octane Fuel Map" category="Fuel" address="11ac3" type="3D" level="3" swapxy="true" scaling="AFR">
+		<table name="Load" address="2d308" type="X Axis" elements="18" scaling="Load"/>
+		<table name="RPM" address="2d2b0" type="Y Axis" elements="14" scaling="RPM"/>
+	</table>
+
+	<table name="High Octane Fuel Map 1" category="Fuel" address="119bf" type="3D" level="3" swapxy="true" scaling="AFR">
+		<table name="Load" address="2d308" type="X Axis" elements="18" scaling="Load"/>
+		<table name="RPM" address="2d2b0" type="Y Axis" elements="14" scaling="RPM"/>
+	</table>
+
+	<table name="Low Octane Fuel Map 1" category="Fuel" address="11bc7" type="3D" level="3" swapxy="true" scaling="AFR">
+		<table name="Load" address="2d308" type="X Axis" elements="18" scaling="Load"/>
+		<table name="RPM" address="2d2b0" type="Y Axis" elements="14" scaling="RPM"/>
+	</table>
+
+	<table name="Open Loop Throttle Low Load" category="Fuel" address="11cfc" type="2D" level="2" scaling="ThrottleVoltage">
+		<table name="RPM" address="2d0a0" type="Y Axis" elements="16" scaling="RPM"/>
+	</table>
+
+	<table name="Open Loop Throttle High Load" category="Fuel" address="11d10" type="2D" level="2" scaling="ThrottleVoltage">
+		<table name="RPM" address="2d0a0" type="Y Axis" elements="16" scaling="RPM"/>
+	</table>
+
+	<table name="Open Loop Load # 1" category="Fuel" address="11d28" type="2D" scaling="uint8">
+		<table name="RPM" address="2d0a0" type="Y Axis" elements="16" scaling="RPM"/>
+	</table>
+
+	<table name="Open Loop Load # 2" category="Fuel" address="11d3c" type="2D" level="2" scaling="Load8">
+		<table name="RPM" address="2d0a0" type="Y Axis" elements="16" scaling="RPM"/>
+	</table>
+
+	<table name="Post Start Enrich Trim vs Load" category="Fuel" address="11d8a" type="2D" level="2" scaling="Percent (128)">
+		<table name="RPM" address="2d2e4" type="X Axis" elements="14" scaling="Load"/>
+	</table>
+
+	<table name="Post Start Enrichment" category="Fuel" address="11d9c" type="2D" level="2" scaling="uint8">
+		<table name="Engine Temp" address="2d42e" type="X Axis" elements="9" scaling="Temp"/>
+	</table>
+
+	<table name="Cranking Primer - First Pulse" category="Fuel" address="11e3e" type="2D" level="3" scaling="uint8">
+		<table name="Temp" address="2d446" type="X Axis" elements="11" scaling="Temp"/>
+	</table>
+
+	<table name="Accel Enrich Base vs Engine Temp" category="Fuel" address="11e7e" type="2D" level="4" scaling="uint8">
+		<table name="Engine Temp" address="2d418" type="X Axis" elements="8" scaling="Temp"/>
+	</table>
+
+	<table name="Decel Fuel Cut Resume RPM Offset" category="Fuel" address="11cd0" type="2D" level="2" scaling="RPM8">
+		<table name="Engine Temp" address="2d418" type="X Axis" elements="8" scaling="Temp"/>
+	</table>
+
+	<table name="Decel Fuel Cut Resume Enrich" category="Fuel" address="11f08" type="2D" level="2" swapxy="true" scaling="EnrichmentAdj">
+		<table name="Engine Temp" address="2d42e" type="X Axis" elements="9" scaling="Temp"/>
+	</table>
+
+	<table name="Decel Fuel Cut Delay - Neutral A/C Off" category="Fuel" address="128fa" type="2D" level="2" scaling="uint8">
+		<table name="Engine Load" address="2d3fe" type="X Axis" elements="7" scaling="Load"/>
+	</table>
+
+	<table name="Decel Fuel Cut Delay - In Gear A/C Off" category="Fuel" address="12906" type="2D" level="2" scaling="uint8">
+		<table name="Engine Load" address="2d3fe" type="X Axis" elements="7" scaling="Load"/>
+	</table>
+
+	<table name="Decel Fuel Cut Delay - Neutral A/C On" category="Fuel" address="12912" type="2D" level="2" scaling="uint8">
+		<table name="Engine Load" address="2d3fe" type="X Axis" elements="7" scaling="Load"/>
+	</table>
+
+	<table name="Decel Fuel Cut Delay - In Gear A/C On" category="Fuel" address="1291e" type="2D" level="2" scaling="uint8">
+		<table name="Engine Load" address="2d3fe" type="X Axis" elements="7" scaling="Load"/>
+	</table>
+
+	<table name="Decel Fuel Cut Ignition Retard" category="Fuel" address="1292e" type="2D" level="2" scaling="Timing">
+		<table name="Engine Speed" address="2d11c" type="X Axis" elements="10" scaling="RPM"/>
+	</table>
+
+	<table name="Min Coolant Temp for Closed Loop" category="Fuel" address="108a4" type="1D" level="2" scaling="Temp"/>
+
+	<table name="Injector Scaling" category="Fuel" address="10808" type="1D" level="2" scaling="InjectorScaling"/>
+
+	<table name="Lean Spool Trailing Time - Rich Side" category="Lean Spool" address="11db8" type="2D" level="2" scaling="uint8">
+		<table name="RPM" address="2d2e6" type="X Axis" elements="9" scaling="RPM"/>
+	</table>
+
+	<table name="Lean Spool Start RPM" category="Lean Spool" address="109e4" type="1D" level="2" scaling="RPMStatLimit"/>
+
+	<table name="Lean Spool Stop RPM" category="Lean Spool" address="109e6" type="1D" level="2" scaling="RPMStatLimit"/>
+
+	<table name="High Octane Ignition Map 1" category="Timing" address="11f7b" type="3D" level="2" swapxy="true" scaling="Timing">
+		<table name="Load" address="2d382" type="X Axis" elements="19" scaling="Load"/>
+		<table name="RPM" address="2d332" type="Y Axis" elements="18" scaling="RPM"/>
+	</table>
+
+	<table name="Low Octane Ignition Map 1" category="Timing" address="12237" type="3D" level="1" swapxy="true" scaling="Timing">
+		<table name="Load" address="2d382" type="X Axis" elements="19" scaling="Load"/>
+		<table name="RPM" address="2d332" type="Y Axis" elements="18" scaling="RPM"/>
+	</table>
+
+	<table name="High Octane Ignition Map 2" category="Timing" address="120d9" type="3D" level="1" swapxy="true" scaling="Timing">
+		<table name="Load" address="2d382" type="X Axis" elements="19" scaling="Load"/>
+		<table name="RPM" address="2d332" type="Y Axis" elements="18" scaling="RPM"/>
+	</table>
+
+	<table name="Low Octane Ignition Map 2" category="Timing" address="12395" type="3D" level="1" swapxy="true" scaling="Timing">
+		<table name="Load" address="2d382" type="X Axis" elements="19" scaling="Load"/>
+		<table name="RPM" address="2d332" type="Y Axis" elements="18" scaling="RPM"/>
+	</table>
+
+	<table name="Warmup Retard" category="Timing" address="12651" type="3D" level="1" scaling="Enrich">
+		<table name="Load" address="2d382" type="X Axis" elements="19" scaling="Load"/>
+		<table name="RPM" address="2d332" type="Y Axis" elements="18" scaling="RPM"/>
+	</table>
+
+	<table name="Ignition Trim vs Eng Temp" category="Timing" address="127b4" type="2D" level="3" scaling="Enrich">
+		<table name="Engine Temp" address="2d418" type="X Axis" elements="8" scaling="Temp"/>
+	</table>
+
+	<table name="Ignition Trim vs Air Temp" category="Timing" address="127c2" type="2D" level="3" scaling="Enrich">
+		<table name="Engine Temp" address="2d418" type="X Axis" elements="8" scaling="Temp"/>
+	</table>
+
+	<table name="Ignition Trim - Baro" category="Timing" address="127e8" type="2D" level="2" scaling="Enrich">
+		<table name="Baro Press." address="2d28c" type="X Axis" elements="5" scaling="Load16"/>
+	</table>
+
+	<table name="Ignition Trim vs Air Temp Active Above Load" category="Timing" address="127f2" type="2D" level="3" scaling="Load8">
+		<table name="Engine Speed" address="2d086" type="X Axis" elements="10" scaling="RPM"/>
+	</table>
+
+	<table name="Warmup Ignition Control vs Eng Temp" category="Timing" address="127d0" type="2D" level="2" scaling="Percent (256)">
+		<table name="Engine Temp" address="2d490" type="X Axis" elements="8" scaling="Temp"/>
+	</table>
+
+	<table name="Ignition Coil Charge Time - Normal" category="Timing" address="1280c" type="2D" level="2" scaling="uint8">
+		<table name="Battery" address="2d27a" type="X Axis" elements="9" scaling="BatteryVoltage"/>
+	</table>
+
+	<table name="Ignition Coil Charge Time - Alt" category="Timing" address="1281a" type="2D" level="4" scaling="uint8">
+		<table name="Battery" address="2d27a" type="X Axis" elements="9" scaling="BatteryVoltage"/>
+	</table>
+
+	<table name="Idle Stability Timing Control" category="Timing" address="10ae4" type="2D" level="2" scaling="uint16">
+		<table name="Settings" type="Static X Axis" elements="3">
+			<data>Sensitivity</data>
+			<data>Timing Limit</data>
+			<data>Untested</data>
+		</table>
+	</table>
+
+	<table name="Timing Retard Limit" category="Limits" address="10ad4" type="1D" level="1" scaling="uint16"/>
+
+	<table name="Rev Limit" category="Limits" address="10886" type="1D" level="1" scaling="RPMLimit"/>
+
+	<table name="Stationary Rev Limit" category="Limits" address="10872" type="1D" level="1" scaling="RPMStatLimit"/>
+
+	<table name="Speed Limit" category="Limits" address="10888" type="2D" level="2" scaling="VehicleSpeed">
+		<table name="Condition" type="Static Y Axis" elements="2">
+			<data>On</data>
+			<data>Off</data>
+		</table>
+	</table>
+
+	<table name="Knock Control Above Load" category="Timing" address="12836" type="2D" level="2" scaling="Load8">
+		<table name="RPM" address="2d2e6" type="X Axis" elements="14" scaling="RPM"/>
+	</table>
+
+	<table name="Octane Control Above Load" category="Timing" address="12844" type="2D" level="2" scaling="Load8">
+		<table name="RPM" address="2d2e6" type="X Axis" elements="14" scaling="RPM"/>
+	</table>
+
+	<table name="Knock Sensor Filter Map 1" category="Knock Control" address="12f29" type="3D" level="1" swapxy="true" scaling="uint8">
+		<table name="RPM" address="2d63c" type="X Axis" elements="10" scaling="RPM"/>
+		<table name="Load" address="2d656" type="Y Axis" elements="10" scaling="Load"/>
+	</table>
+
+	<table name="Knock Sensor Filter Map 2" category="Knock Control" address="12f95" type="3D" level="1" swapxy="true" scaling="uint8">
+		<table name="RPM" address="2d63c" type="X Axis" elements="10" scaling="RPM"/>
+		<table name="Load" address="2d656" type="Y Axis" elements="10" scaling="Load"/>
+	</table>
+
+	<table name="Knock Sensor Filter Map 3" category="Knock Control" address="13001" type="3D" level="1" swapxy="true" scaling="uint8">
+		<table name="RPM" address="2d63c" type="X Axis" elements="10" scaling="RPM"/>
+		<table name="Load" address="2d656" type="Y Axis" elements="10" scaling="Load"/>
+	</table>
+
+	<table name="Knock Sensor Filter Map 4" category="Knock Control" address="1306d" type="3D" level="1" swapxy="true" scaling="uint8">
+		<table name="RPM" address="2d63c" type="X Axis" elements="10" scaling="RPM"/>
+		<table name="Load" address="2d656" type="Y Axis" elements="10" scaling="Load"/>
+	</table>
+
+	<table name="Knock Sensor Filter Map 5" category="Knock Control" address="130d9" type="3D" level="1" swapxy="true" scaling="uint8">
+		<table name="RPM" address="2d63c" type="X Axis" elements="10" scaling="RPM"/>
+		<table name="Load" address="2d656" type="Y Axis" elements="10" scaling="Load"/>
+	</table>
+
+	<table name="Desired ISCV intial step position with AC off-Neutral" category="ISCV Control" address="128a6" type="2D" level="2" scaling="ISCVSteps">
+		<table name="Engine Temp" address="2d418" type="Y Axis" elements="8" scaling="Temp"/>
+	</table>
+
+	<table name="Desired ISCV intial step position with AC off-Drive" category="ISCV Control" address="128b2" type="2D" level="2" scaling="ISCVSteps">
+		<table name="Engine Temp" address="2d418" type="Y Axis" elements="8" scaling="Temp"/>
+	</table>
+
+	<table name="Desired ISCV intial step position with AC on-Neutral" category="ISCV Control" address="128be" type="2D" level="2" scaling="ISCVSteps">
+		<table name="Engine Temp" address="2d418" type="Y Axis" elements="8" scaling="Temp"/>
+	</table>
+
+	<table name="Desired ISCV initial step position with AC on-Drive" category="ISCV Control" address="128ca" type="2D" level="4" scaling="ISCVSteps">
+		<table name="Engine Temp" address="2d418" type="Y Axis" elements="8" scaling="Temp"/>
+	</table>
+
+	<table name="Desired Idle RPM-Neutral" category="ISCV Control" address="1288e" type="2D" level="2" scaling="RPM8">
+		<table name="Engine Temp" address="2d418" type="Y Axis" elements="8" scaling="Temp"/>
+	</table>
+
+	<table name="Desired Idle RPM-Drive" category="ISCV Control" address="1289a" type="2D" level="2" scaling="RPM8">
+		<table name="Engine Temp" address="2d418" type="Y Axis" elements="8" scaling="Temp"/>
+	</table>
+
+	<table name="Desired Idle RPM with AC on" category="ISCV Control" address="10b6c" type="2D" level="2" scaling="RPMTarget">
+		<table name="Condition" type="Static Y Axis" elements="4">
+			<data>Neut</data>
+			<data>Drive</data>
+			<data>Neut</data>
+			<data>Drive</data>
+		</table>
+	</table>
+
+	<table name="High Intake Air Temp ISCV Increase" category="ISCV Control" address="11aa2" type="2D" level="2" flipy="true" scaling="ISCVSteps16">
+		<table name="Condition" type="Static Y Axis">
+			<data>AC Off</data>
+			<data>AC On</data>
+		</table>
+	</table>
+
+	<table name="Idle Stepper Lookup Table" category="ISCV Control" address="12999" type="3D" level="2" scaling="ISCVSteps">
+		<table name="Coolant Temp" address="2d4be" type="X Axis" elements="8" scaling="Temp"/>
+		<table name="ISCV Demand" type="Y Axis" elements="27" scaling="RPM"/>
+	</table>
+
+	<table name="Idle Post Start Step Incr vs Air Temp" category="Idle" address="1293c" type="2D" level="3" scaling="ISCVSteps">
+		<table name="Air temp" address="2d4c0" type="X Axis" elements="8" scaling="Temp"/>
+	</table>
+
+	<table name="Idle Post Start Decay Time" category="Idle" address="12948" type="2D" level="3" scaling="uint8">
+		<table name="Air Temp" address="2d4c0" type="X Axis" elements="8" scaling="Temp"/>
+	</table>
+
+	<table name="Idle Error Correction - Neutral" category="Idle" address="12962" type="2D" level="3" scaling="ISCVSteps">
+		<table name="Error" address="2d146" type="X Axis" elements="9" scaling="RPM"/>
+	</table>
+
+	<table name="Idle Error Correction - Drive AC On" category="Idle" address="12970" type="2D" level="3" scaling="uint8">
+		<table name="Error" address="2d146" type="X Axis" elements="9" scaling="RPM"/>
+	</table>
+
+	<table name="Boost Limit" category="Limits" type="2D" level="2" scaling="LoadBoost">
+		<table name="RPM" address="2d086" type="Y Axis" elements="10" scaling="RPM"/>
+	</table>
+
+	<table name="Boost Control Load Offset" category="Turbo" address="10e0a" type="1D" level="2" scaling="Load16"/>
+
+	<table name="Wastegate Solenoid Activation RPM" category="Turbo" address="10e02" type="2D" level="1" scaling="RPMStatLimit">
+		<table name="Condition" type="Static Y Axis" elements="4">
+			<data>Reactivate On</data>
+			<data>Reactivate Off</data>
+			<data>Deactivate On</data>
+			<data>Deactivate Off</data>
+		</table>
+	</table>
+
+	<table name="Boost Cut Delay Timer" category="Turbo" address="10894" type="1D" level="4" scaling="Time"/>
+
+	<table name="Min Temp for Full Boost Control" category="Turbo" address="114fe" type="1D" level="3" scaling="Temp"/>
+
+	<table name="Octane Below to Disable Boost Control" category="Turbo" address="10dfb" type="1D" level="2" scaling="Percent (256)"/>
+
+	<table name="Octane Above to Enable Boost Control" category="Turbo" address="10dfd" type="1D" level="2" scaling="Percent (256)"/>
+
+	<table name="Boost Control Limiting Vehicle Speed" category="Turbo" address="12f84" type="2D" level="3" scaling="VehicleSpeed8">
+		<table name="Condition" type="Static Y Axis" elements="2">
+			<data>On</data>
+			<data>Off</data>
+		</table>
+	</table>
+
+	<table name="Boost Enhancement (Anti-Lag) Start RPM" category="Turbo" address="109e4" type="1D" level="2" scaling="RPMStatLimit"/>
+
+	<table name="Boost Enhancement (Anti-lag) Stop RPM" category="Turbo" address="109e6" type="1D" level="2" scaling="RPMStatLimit"/>
+
+	<table name="Boost Enhancement (Anti-lag) Table" category="Turbo" address="11f26" type="2D" level="1" scaling="ThrottleVoltage">
+		<table name="RPM" address="2d2d2" type="Y Axis" elements="7" scaling="RPMStatLimit"/>
+	</table>
+
+	<table name="Boost Enhancement Enrich/Enlean (Anti-lag) Map" category="Turbo" address="124f3" type="3D" level="1" swapxy="true" scaling="AFR">
+		<table name="Load" address="2d382" type="X Axis" elements="19" scaling="Load"/>
+		<table name="RPM" address="2d332" type="Y Axis" elements="18" scaling="RPM"/>
+	</table>
+
+	<table name="Turbo Boost Error Correction" category="Turbo" address="12a84" type="2D" level="1" scaling="DynamicBoost">
+		<table name="Boost Error" address="2d5a2" type="Y Axis" elements="17" scaling="BoostError"/>
+	</table>
+
+	<table name="Max Total Upward WGDC Correction vs TPS" category="Turbo" address="12a76" type="2D" level="2" scaling="DynamicBoost">
+		<table name="TPS" address="2d3c8" type="X Axis" elements="9" scaling="TPS Percent"/>
+	</table>
+
+	<table name="Max Wastegate Duty # 1" category="Turbo" address="12a9a" type="2D" level="2" scaling="WGDuty">
+		<table name="RPM" address="2d576" type="Y Axis" elements="16" scaling="RPM"/>
+	</table>
+
+	<table name="Max Wastegate Duty # 2" category="Turbo" address="12aae" type="2D" level="2" scaling="WGDuty">
+		<table name="RPM" address="2d576" type="Y Axis" elements="16" scaling="RPM"/>
+	</table>
+
+	<table name="Max Wastegate Duty # 3" category="Turbo" address="12ac2" type="2D" level="2" scaling="WGDuty">
+		<table name="RPM" address="2d576" type="Y Axis" elements="16" scaling="RPM"/>
+	</table>
+
+	<table name="Max Wastegate Duty # 4" category="Turbo" address="12ad6" type="2D" level="2" scaling="WGDuty">
+		<table name="RPM" address="2d576" type="Y Axis" elements="16" scaling="RPM"/>
+	</table>
+
+	<table name="Boost Desired Engine Load # 1" category="Turbo" address="12afc" type="2D" level="2" scaling="Load8">
+		<table name="RPM" address="2d334" type="Y Axis" elements="9" scaling="RPM"/>
+	</table>
+
+	<table name="WGDC Correction update delay #1" category="Turbo" address="10df0" type="1D" level="1" scaling="uint16"/>
+
+	<table name="WGDC Correction update delay #2" category="Turbo" address="10df2" type="1D" level="1" scaling="uint16"/>
+
+	<table name="Boost Control RPM/MPH Crossover" category="Turbo Boost non-JDM" address="12f84" type="1D" level="3" scaling="RPMPerMPH"/>
+
+	<table name="Spec Index" address="10208" type="1D" level="5" scaling="uint16"/>
+
+	<table name="Software Version" address="1021a" type="2D" level="5" scaling="Hex8">
+		<table name="Byte Position" type="Static X Axis" elements="4">
+			<data>b1</data>
+			<data>b2</data>
+			<data>b3</data>
+			<data>b4</data>
+		</table>
+	</table>
+
+	<table name="Case Number (Spec 0)" address="10233" type="3D" level="5" scaling="Hex8">
+		<table name="Part Number" type="Static X Axis" elements="3">
+			<data>PN2 .</data>
+			<data>PN3 .</data>
+			<data>PN4 .</data>
+		</table>
+		<table name="PN1" address="10232" type="Y Axis" elements="1" scaling="CaseAlphaNumeric"/>
+	</table>
+
+	<table name="Case Number (Spec 1)" address="10237" type="3D" level="5" scaling="Hex8">
+		<table name="Part Number" type="Static X Axis" elements="3">
+			<data>PN2 .</data>
+			<data>PN3 .</data>
+			<data>PN4 .</data>
+		</table>
+		<table name="PN1" address="10236" type="Y Axis" elements="1" scaling="CaseAlphaNumeric"/>
+	</table>
+
+	<table name="Case Number (Spec 2)" address="1023b" type="3D" level="5" scaling="Hex8">
+		<table name="Part Number" type="Static X Axis" elements="3">
+			<data>PN2 .</data>
+			<data>PN3 .</data>
+			<data>PN4 .</data>
+		</table>
+		<table name="PN1" address="1023a" type="Y Axis" elements="1" scaling="CaseAlphaNumeric"/>
+	</table>
+
+	<table name="Case Number (Spec 3)" address="1023f" type="3D" level="5" scaling="Hex8">
+		<table name="Part Number" type="Static X Axis" elements="3">
+			<data>PN2 .</data>
+			<data>PN3 .</data>
+			<data>PN4 .</data>
+		</table>
+		<table name="PN1" address="1023e" type="Y Axis" elements="1" scaling="CaseAlphaNumeric"/>
+	</table>
+
+	<table name="Case Number (Spec 4)" address="10243" type="3D" level="5" scaling="Hex8">
+		<table name="Part Number" type="Static X Axis" elements="3">
+			<data>PN2 .</data>
+			<data>PN3 .</data>
+			<data>PN4 .</data>
+		</table>
+		<table name="PN1" address="10242" type="Y Axis" elements="1" scaling="CaseAlphaNumeric"/>
+	</table>
+
+	<table name="Case Number (Spec 5)" address="10247" type="3D" level="5" scaling="Hex8">
+		<table name="Part Number" type="Static X Axis" elements="3">
+			<data>PN2 .</data>
+			<data>PN3 .</data>
+			<data>PN4 .</data>
+		</table>
+		<table name="PN1" address="10246" type="Y Axis" elements="1" scaling="CaseAlphaNumeric"/>
+	</table>
+
+	<table name="Case Number (Spec 6)" address="1024b" type="3D" level="5" scaling="Hex8">
+		<table name="Part Number" type="Static X Axis" elements="3">
+			<data>PN2 .</data>
+			<data>PN3 .</data>
+			<data>PN4 .</data>
+		</table>
+		<table name="PN1" address="1024a" type="Y Axis" elements="1" scaling="CaseAlphaNumeric"/>
+	</table>
+
+	<table name="Case Number (Spec 7)" address="1024f" type="3D" level="5" scaling="Hex8">
+		<table name="Part Number" type="Static X Axis" elements="3">
+			<data>PN2 .</data>
+			<data>PN3 .</data>
+			<data>PN4 .</data>
+		</table>
+		<table name="PN1" address="1024e" type="Y Axis" elements="1" scaling="CaseAlphaNumeric"/>
+	</table>
+
+	<!-- 2026-08-13 Claude: moved here from RVRbase.xml (was wrongly listed there as elements="N"
+	     byte-array "Scaling Tables" entries with fabricated header-offset comments). Ghidra's own
+	     H8539F-TABLE scrape of this ROM types all 7 of these addresses as "(1D scalar) db[2]" -
+	     plain 2-byte scalar values, not multi-element axis/breakpoint tables. No direct-mode
+	     callers/xrefs found for any of the 7 (H8539F-CONVENTION-B pattern - likely EP-banked).
+	     Purpose/scaling not yet identified; left as raw uint16 scalars pending further trace.
+	     ROM-specific (ties to this xmlid's addresses), so kept out of the shared RVRbase.xml. -->
+
+	<table name="Scaling 12065" category="Scaling Tables" address="12065" type="1D" scaling="uint16"/>
+	<table name="Scaling 1208B" category="Scaling Tables" address="1208b" type="1D" scaling="uint16"/>
+	<table name="Scaling 1209E" category="Scaling Tables" address="1209e" type="1D" scaling="uint16"/>
+	<table name="Scaling 121C3" category="Scaling Tables" address="121c3" type="1D" scaling="uint16"/>
+	<table name="Scaling 121D6" category="Scaling Tables" address="121d6" type="1D" scaling="uint16"/>
+	<table name="Scaling 12222" category="Scaling Tables" address="12222" type="1D" scaling="uint16"/>
+	<table name="Scaling 1246F" category="Scaling Tables" address="1246f" type="1D" scaling="uint16"/>
+
+</rom>

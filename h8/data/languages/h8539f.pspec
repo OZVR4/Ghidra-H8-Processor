@@ -59,7 +59,46 @@ H8/539F Processor Spec for Ghidra
       the base argument to the userop call in SLEIGH. Omitting it left the
       decompiler treating spSegment(...) as an opaque value-producing
       CALLOTHER with no pointer significance, consistent with SP24 never
-      appearing anywhere in the stage_1 decompile output. -->
+      appearing anywhere in the stage_1 decompile output.
+      ATTEMPTED (review.md item 8, step 3a, 2026-07-21), REVERTED same day:
+      tried extending EP banking (R4/R5, 18 sites in h8539f.slaspec) to call
+      spSegment(EP, ...) the same way FP reuses spSegment(TP, FP), and adding
+      a second <register name="EP"/> to constresolve below alongside TP.
+      BLOCKED at the schema level: ReloadSleighLanguage failed with
+      SleighException / ValidityViolation "element register was found where
+      no element may occur" (language_common.rxg's constresolve element
+      wraps varnode_tags_type, a single-choice of exactly one register or
+      varnode, not a list). Ghidra's segmentop/constresolve design supports
+      exactly ONE fully-recognized base register per address space, and TP
+      already holds that slot for SP/FP. Reverting spSegment(EP,...) too,
+      not just constresolve: per this file's own step-1 history, a userop
+      call to an unresolved constresolve register decompiles as an opaque
+      CALLOTHER with no pointer significance and does not even constant-fold
+      in the common EP=0 case the way the original (zext(EP)<<16)|zext(...)
+      pattern already does under tracked_set; so leaving spSegment(EP,...)
+      in place without matching constresolve support would have been a
+      regression on the many already-verified EP-banked accesses, not a
+      fix. All 18 EP sites and constresolve reverted to their pre-3a state.
+      Live repro (flash_vpp_pulse_handshake_echo_verify @0x20992, ldc.b
+      R2,EP followed by an EP-banked @R4 access, decompiling as
+      unaff_R3/CONCAT12 garbage) still stands as of the revert above.
+
+      RETRIED (review.md item 8, step 3b, 2026-07-21) ; constresolve
+      LEFT AS TP-ONLY this time (not touching this <constresolve> block at
+      all), only the .slaspec side redone: all 18 EP-banked sites
+      (disp8_banked/disp16_banked targetBase=4/5, Rn_banked/Rs_banked/
+      Rn_banked2 R4/R5, eab/eaw_predec/postinc R4/R5) now call
+      spSegment(EP, ...) instead of the manual (zext(EP)<<16)|zext(...)
+      pattern. Precedent verified firsthand against Ghidra 12.0.4's own
+      x86-16-real.pspec + ia.sinc before retrying: constresolve there names
+      only DS, yet segment() is called throughout with SS/ES/CS/seg16 in
+      core, actively-exercised functionality (string ops, push/pop,
+      far call/ret, segment-override prefixes) ; confirming a userop call
+      to a non-constresolve register is legal and produces a real segmented
+      pointer, just without constresolve's constant-folding benefit. Not
+      yet compiled/installed/tested as of this comment ; see review.md
+      item 8 step 3b for pass/fail criteria against the
+      flash_vpp_pulse_handshake_echo_verify repro. -->
  <segmentop space="ram" userop="spSegment">
    <pcode>
      <input name="base" size="1"/>
@@ -302,8 +341,9 @@ res = (zext(base) << 16) | zext(inner);
 
    <!-- Flash Memory Control Registers -->
    <symbol name="FLMCR"    address="ram:0xFEE0" entry="false"/>
-   <symbol name="FLM_EBR1" address="ram:0xFEE1" entry="false"/>
-   <symbol name="FLM_EBR2" address="ram:0xFEE2" entry="false"/>
+   <!-- 0xFEE1 is reserved (per H8/539F Hardware Manual Appendix C, p.682) -->
+   <symbol name="FLM_EBR1" address="ram:0xFEE2" entry="false"/>
+   <symbol name="FLM_EBR2" address="ram:0xFEE3" entry="false"/>
    <symbol name="FLMER"    address="ram:0xFEEC" entry="false"/>
    <symbol name="FLMSR"    address="ram:0xFEED" entry="false"/>
 

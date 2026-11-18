@@ -1,0 +1,1473 @@
+# TODO: Need to somehow make it so that SR/CCR is accessible in the decompiler.
+#       For high-level C programming, it makes sense that system registers, like R0, PC, FP, DP, are inaccessible.
+#       But this one has our interrupt control, so we need to be able to access it.
+
+# NOTE: Whenever an instruction modifies the stack, such as LINK, JSR, and even STM (..),@-SP,
+#       the stack only gets adjusted in its 16-bit value, causing problems for the programmer
+#       if an over/underflow occurs. I think it's safe to assume that an average program will
+#       not have this problem, and Ghidra seems to have trouble following the stack in this way.
+#       As such, I have simplified stack operations to operate on the full 24-bit address, so
+#       Ghidra can more easily track the stack depth as it changes throughout a function.
+
+define endian=big;
+
+define alignment=1;
+
+#define space DATA type=ram_space size=4;
+#define space CODE type=ram_space size=4 default;
+define space ram      type=ram_space    size=4 default;
+define space register type=register_space size=1;
+
+# --- General purpose registers (2 bytes each, offsets 0x00-0x0F) ---
+define register offset=0x00 size=2 [ R0 R1 R2 R3 R4 R5 FP SP ];
+# R0R1: REVERTED 2026-07-22 (same-day follow-up). Confirmed via a genuine full
+# Ghidra restart + fresh ROM reopen (not a stale-reload artifact) that this
+# "just another register" approach does NOT avoid the pollution it was meant
+# to fix: isr_sci1_eri (0x15caa, no call relationship to any R0:R1 math
+# helper) still shows "Unable to track spacebase fully for stack" after a
+# cold restart, and muldiv_u16_scaled still shows "Restarted to delay
+# deadcode elimination for space: register" plus messy stack0xfffe casts,
+# byte-for-byte identical before and after the restart and before and after
+# an explicit set_function_prototype re-application. So a real overlapping
+# register in the register space can still perturb the decompiler's global
+# return-value/stack-tracking model just by existing, not just via the
+# join+solo-pentry construct originally blamed. Falling back to plain ushort
+# on the affected 6 math helpers (see h8539f.cspec) -- accepts the known
+# dropped-R1-half warning on just those 6 functions, which is a smaller,
+# already-understood, and non-spreading problem. Backup of the R0R1 state
+# (files as of this session) is in backup_20260722_pre_r0r1_revert/ if this
+# needs re-diagnosing later.
+# --- Control/segment registers (1 byte each, offsets 0x10-0x17) ---
+# TP is at 0x13 (matches old size=1 row index 19 -> byte 19 = 0x13)
+define register offset=0x10 size=1 [ CP DP EP TP BR _ _ _ ];
+# --- Status register (2 bytes at 0x20, CCR byte at 0x21) ---
+define register offset=0x20 size=2 [ SR ];
+define register offset=0x48 size=1 [ CCR ];
+# --- Individual flag pseudo-registers (1 byte each, offsets 0x24-0x27) ---
+define register offset=0x24 size=1 [ CF VF ZF NF ];
+# --- PC (4 bytes at 0x28) ---
+define register offset=0x28 size=4 [ PC ];
+# --- 24-bit pseudo stack/frame pointers (4 bytes, offsets 0x30-0x37) ---
+define register offset=0x30 size=4 [ SP24 ];
+define register offset=0x34 size=4 [ FP24 ];
+# --- Context register for SLEIGH (4 bytes at 0x40) ---
+define register offset=0x40 size=4 [ contextreg ];
+define register offset=0x4C size=1 [ FPH ];
+# PC16 removed — was defined at offset 0x81 (mid-parent within PC at 0x80 size=4)
+# but was never referenced anywhere in the slaspec (dead definition).
+# Removed 2026-06-23: suspected cause of encodeTranslator() serialization failure
+# that produces "Marshaling error: syntax error" in DecompInterface.openProgram().
+
+define context contextreg
+	targetBase = (0,2)
+	targetReg = (3,5);
+
+#@define CF    "SR[0,1]"
+#@define VF    "SR[1,1]"
+#@define ZF    "SR[2,1]"
+#@define NF    "SR[3,1]"
+@define CF    "CF"
+@define VF    "VF"
+@define ZF    "ZF"
+@define NF    "NF"
+@define IMASK "SR[8,3]"
+@define TF    "SR[15,1]"
+
+@define DIV0VECTOR "0x10"
+
+# NOTE: the @include list lives at the end of this file (see "Functional-area
+# instruction includes" near the bottom), after every shared token/field/
+# subtable/macro it depends on has been defined. An earlier, accidental copy
+# of these @include lines used to sit right here -- before eab_direct/eaw_direct,
+# the opcode/opcode_special/opcode47 fields, and other shared infrastructure
+# were defined -- which caused SLEIGH to fail with "No matching global symbol
+# 'eab_direct'" / "unknown family or operand 'opcode'" when compiling
+# h8539f-arith.sinc (SLEIGH lesson 1: @include order matters). Removed July 2026.
+
+# The SR has 8 flags.
+# Taking a cue from x86, define pseudo-registers for each flag
+# separately; otherwise decompilation is a mess
+# define register offset=0x20 size=1 [T IMASK N Z V C];
+
+define token addrMode(8)
+	Rn = (0, 2)
+	Rnb = (0, 2)
+	sz = (3, 3)
+	mode = (4, 7)
+;
+
+define token instr8(8)
+	Rd = (0,2)
+	RdN = (0,2)
+	Rdb = (0,2)
+	Rs = (0,2)
+	Rsb = (0,2)
+	CR8 = (0,2)
+	CR16= (0,2)
+	opcode = (3,7)
+	opcode47 = (4,7)
+	op_imm4 = (0,3)
+	cond = (0,3)
+;
+define token special(8)
+	opcode_special = (0,7)
+;
+
+# MAP4 second byte (follows first byte 0xE0-0xEF, opcode47=14).
+# m4op[7:4] selects the operation family:
+#   0x0X = mov:g.b #imm8, Rn  (byte immediate to register, Rn = m4byte & 7)
+#   0x1X = mov:g.w #imm8/:16, Rn  (word immediate to register)
+#   0x8X = mov:g load EA -> Rn
+#   0x9X = mov:g store Rn -> EA
+# m4Rn[2:0] = register operand; m4sz[3] = 0 (byte) / 1 (word) for immediate forms.
+define token map4b(8)
+	m4Rn   = (0, 2)
+	m4sz   = (3, 3)
+	m4op   = (4, 7)
+	m4full = (0, 7)
+	# BUG 11 fix (Part A): A4tail groups MAP4 second-byte codes 0x80-0x8F and 0x90-0x9F
+	# in 8-wide chunks, not 16-wide. m4sz (bit 3, above) is the true family selector for
+	# these two ranges: m4sz=0 -> mov_g, m4sz=1 -> ldc/stc (NOT mov.w as previously
+	# assumed). m4CR aliases the same low-3-bits as m4Rn but attaches to the
+	# control-register hole list used by the existing MAP3 stc/ldc fix (BUG 7) instead
+	# of the GPR list, since ldc/stc address control registers, not Rn.
+	m4CR   = (0, 2)
+;
+attach variables [ m4Rn ] [ R0 R1 R2 R3 R4 R5 FP SP ];
+attach variables [ m4CR ] [ _ CCR _ BR EP DP _ TP ];
+
+# MAP6's own tail-dispatch byte. MAP6 is only reachable here via a NESTED
+# escape (ana.cpp lines 420-620): byte 1 triggers MAP3 (eab_*, mode=10) or
+# MAP4 (mode=11-15) as usual, byte 2 is a fixed literal 0x00 (MAP3/4's own
+# head-table index 0 = MAP6, i.e. opcode_special=0), and THIS token reads
+# byte 3, the real MAP6 dispatch: m6grp = byte3>>3 selects movfpe (0x80-87
+# group -> 16) / movtpe (0x90-97 group -> 18), m6Rn = byte3 & 7 is a plain
+# GPR (no +SR offset -- that's ldc/stc/andc/orc/xorc only, ana.cpp line 593).
+define token m6b(8)
+	m6Rn   = (0, 2)
+	m6grp  = (3, 7)
+;
+attach variables [ m6Rn ] [ R0 R1 R2 R3 R4 R5 FP SP ];
+
+# ---------------------------------------------------------------------------
+# MAP5 dispatch byte (BUG 6 fix).
+# MAP5 is reached via first byte 0x04 (8-bit immediate escape, opcode_special=4)
+# or 0x0C (16-bit immediate escape, opcode_special=0xC) -- see ana.cpp A2[4]/A2[12]
+# and the "rtd" correction note in README.md for why these two bytes are MAP5's
+# and NOT rtd's. Real layout: [opcode_special byte][imm8 or imm16 payload]
+# [this dispatch byte]. Per ana.cpp's tables[] resolution loop: codes < 0x20 in
+# this byte hit A5[] (all H8500_null -- no valid instruction starts under 0x20
+# here), codes >= 0x20 hit A5tail[(code>>3)-4], with the low 3 bits as Rn and
+# the top 5 bits (this token's m5field, raw bits 3-7, NOT offset by -4) as the
+# operation selector. Valid m5field values confirmed against A5tail:
+#   4=add_g   5=adds   6=sub    7=subs   8=or     9=orc   10=and   11=andc
+#   12=xor    13=xorc  14=cmp_g 16=mov_g 17=ldc   20=addx 21=mulxu 22=subx 23=divxu
+# (15, 18, 19, 24-31 are H8500_null -- no valid instruction, matches ana.cpp).
+# m5CR aliases the same 3 bits as m5Rn but attaches to the control-register hole
+# list, for the ldc/andc/orc/xorc forms (mirrors map4b's m4Rn/m4CR pattern).
+# ---------------------------------------------------------------------------
+define token map5b(8)
+	m5Rn    = (0, 2)
+	m5CR    = (0, 2)
+	m5field = (3, 7)
+;
+attach variables [ m5Rn ] [ R0 R1 R2 R3 R4 R5 FP SP ];
+attach variables [ m5CR ] [ _ CCR _ BR EP DP _ TP ];
+
+
+attach variables [ Rd Rs Rn ]    [ R0  R1  R2  R3  R4  R5  FP  SP  ];
+attach variables [ RdN ]           [ R1  R2  R3  R4  R5  FP  SP  _   ];
+#attach variables [ Rdb Rsb Rnb ] [ R0L R1L R2L R3L R4L R5L FPL SPL ];
+#attach names [ targetReg ] [ R0  R1  R2  R3  R4  R5  FP  SP  ];
+
+attach variables [ CR8 ]         [ _   CCR _   BR  EP  DP  _   TP  ];
+attach variables [ CR16 ]        [ SR  _   _   _   _   _   _   _   ];
+#attach variables [ targetBase ]   [ DP DP DP DP EP EP TP TP ];
+
+attach names [sz] [ "b" "w" ];
+#attach names [Rdb Rnb] [ "R0" "R1" "R2" "R3" "R4" "R5" "FP" "SP" ];
+
+define token addrByte(8)    addr8  = (0, 7);
+define token addrWord(16)   addr16 = (0, 15);
+define token addrLong(24)   addr24 = (0, 23);
+define token pageByte(8)    page   = (0, 7);
+define token dispByte(8)    disp8  = (0,7)  signed;
+define token dispWord(16)   disp16 = (0,15) signed;
+define token immByte(8)     imm8   = (0,7);
+define token immWord(16)    imm16  = (0,15);
+define token regListByte(8)
+	reglist  = (0,7)
+	reglist0 = (0,0)
+	reglist1 = (1,1)
+	reglist2 = (2,2)
+	reglist3 = (3,3)
+	reglist4 = (4,4)
+	reglist5 = (5,5)
+	reglist6 = (6,6)
+	reglist7 = (7,7)
+	;
+
+attach names [reglist] [
+                         ""      "R0"        "R1"       "R0-R1"       "R2"    "R0,R2"    "R1-R2"     "R0-R2"     # 0-7
+                         "R3"    "R0,R3"     "R1,R3"    "R0-R1,R3"    "R2-R3" "R0,R2-R3" "R1-R3"     "R0-R3"     # 08-0F
+                         "R4"    "R0,R4"     "R1,R4"    "R0-R1,R4"    "R2,R4" "R0,R2,R4" "R1-R2,R4"  "R0-R2,R4"  # 10-17
+                         "R3-R4" "R0,R3-R4"  "R1,R3-R4"  "R0-R1,R3-R4" "R2-R4" "R0,R2-R4" "R1-R4"     "R0-R4"     # 18-1F
+
+                         "R5"    "R0,R5"     "R1,R5"    "R0-R1,R5"    "R2,R5"    "R0,R2,R5"    "R1-R2,R5"     "R0-R2,R5"
+                         "R3,R5" "R0,R3,R5"  "R1,R3,R5" "R0-R1,R3,R5" "R2-R3,R5" "R0,R2-R3,R5" "R1-R3,R5"     "R0-R3,R5"
+                         "R4-R5" "R0,R4-R5"  "R1,R4-R5" "R0-R1,R4-R5" "R2,R4-R5" "R0,R2,R4-R5" "R1-R2,R4-R5"  "R0-R2,R4-R5"
+                         "R3-R5" "R0,R3-R5"  "R1,R3-R5" "R0-R1,R3-R5" "R2-R5"    "R0,R2-R5"    "R1-R5"        "R0-R5"
+
+                         "FP"       "R0,FP"       "R1,FP"       "R0-R1,FP"       "R2,FP"    "R0,R2,FP"    "R1-R2,FP"     "R0-R2,FP"
+                         "R3,FP"    "R0,R3,FP"    "R1,R3,FP"    "R0-R1,R3,FP"    "R2-R3,FP" "R0,R2-R3,FP" "R1-R3,FP"     "R0-R3,FP"
+                         "R4,FP"    "R0,R4,FP"    "R1,R4,FP"    "R0-R1,R4,FP"    "R2,R4,FP" "R0,R2,R4,FP" "R1-R2,R4,FP"  "R0-R2,R4,FP"
+                         "R3-R4,FP" "R0,R3-R4,FP" "R1,R3-R4,FP" "R0-R1,R3-R4,FP" "R2-R4,FP" "R0,R2-R4,FP" "R1-R4,FP"     "R0-R4,FP"
+
+                         "R5,FP"    "R0,R5,FP"    "R1,R5,FP"    "R0-R1,R5,FP"    "R2,R5,FP"    "R0,R2,R5,FP"    "R1-R2,R5,FP"    "R0-R2,R5,FP"
+                         "R3,R5,FP" "R0,R3,R5,FP" "R1,R3,R5,FP" "R0-R1,R3,R5,FP" "R2-R3,R5,FP" "R0,R2-R3,R5,FP" "R1-R3,R5,FP"    "R0-R3,R5,FP"
+                         "R4-R5,FP" "R0,R4-R5,FP" "R1,R4-R5,FP" "R0-R1,R4-R5,FP" "R2,R4-R5,FP" "R0,R2,R4-R5,FP" "R1-R2,R4-R5,FP" "R0-R2,R4-R5,FP"
+                         "R3-R5,FP" "R0,R3-R5,FP" "R1,R3-R5,FP" "R0-R1,R3-R5,FP" "R2-R5,FP"    "R0,R2-R5,FP"    "R1-R5,FP"       "R0-R5,FP"
+
+                         "SP"       "R0,SP"       "R1,SP"       "R0-R1,SP"       "R2,SP"    "R0,R2,SP"    "R1-R2,SP"    "R0-R2,SP"
+                         "R3,SP"    "R0,R3,SP"    "R1,R3,SP"    "R0-R1,R3,SP"    "R2-R3,SP" "R0,R2-R3,SP" "R1-R3,SP"    "R0-R3,SP"
+                         "R4,SP"    "R0,R4,SP"    "R1,R4,SP"    "R0-R1,R4,SP"    "R2,R4,SP" "R0,R2,R4,SP" "R1-R2,R4,SP" "R0-R2,R4,SP"
+                         "R3-R4,SP" "R0,R3-R4,SP" "R1,R3-R4,SP" "R0-R1,R3-R4,SP" "R2-R4,SP" "R0,R2-R4,SP" "R1-R4,SP"    "R0-R4,SP"
+
+                         "R5,SP"    "R0,R5,SP"    "R1,R5,SP"    "R0-R1,R5,SP"    "R2,R5,SP"    "R0,R2,R5,SP"    "R1-R2,R5,SP"    "R0-R2,R5,SP"
+                         "R3,R5,SP" "R0,R3,R5,SP" "R1,R3,R5,SP" "R0-R1,R3,R5,SP" "R2-R3,R5,SP" "R0,R2-R3,R5,SP" "R1-R3,R5,SP"    "R0-R3,R5,SP"
+                         "R4-R5,SP" "R0,R4-R5,SP" "R1,R4-R5,SP" "R0-R1,R4-R5,SP" "R2,R4-R5,SP" "R0,R2,R4-R5,SP" "R1-R2,R4-R5,SP" "R0-R2,R4-R5,SP"
+                         "R3-R5,SP" "R0,R3-R5,SP" "R1,R3-R5,SP" "R0-R1,R3-R5,SP" "R2-R5,SP"    "R0,R2-R5,SP"    "R1-R5,SP"       "R0-R5,SP"
+
+                         "FP,SP"       "R0,FP,SP"       "R1,FP,SP"       "R0-R1,FP,SP"       "R2,FP,SP"    "R0,R2,FP,SP"    "R1-R2,FP,SP" "R0-R2,FP,SP"
+                         "R3,FP,SP"    "R0,R3,FP,SP"    "R1,R3,FP,SP"    "R0-R1,R3,FP,SP"    "R2-R3,FP,SP" "R0,R2-R3,FP,SP" "R1-R3,FP,SP" "R0-R3,FP,SP"
+                         "R4,FP,SP"    "R0,R4,FP,SP"    "R1,R4,FP,SP"    "R0-R1,R4,FP,SP"    "R2,R4,FP,SP" "R0,R2,R4,FP,SP" "R1-R2,R4,FP,SP" "R0-R2,R4,FP,SP"
+                         "R3-R4,FP,SP" "R0,R3-R4,FP,SP" "R1,R3-R4,FP,SP" "R0-R1,R3-R4,FP,SP" "R2-R4,FP,SP" "R0,R2-R4,FP,SP" "R1-R4,FP,SP" "R0-R4,FP,SP"
+
+                         "R5,FP,SP"    "R0,R5,FP,SP"    "R1,R5,FP,SP"    "R0-R1,R5,FP,SP"    "R2,R5,FP,SP"    "R0,R2,R5,FP,SP"    "R1-R2,R5,FP,SP"    "R0-R2,R5,FP,SP"
+                         "R3,R5,FP,SP" "R0,R3,R5,FP,SP" "R1,R3,R5,FP,SP" "R0-R1,R3,R5,FP,SP" "R2-R3,R5,FP,SP" "R0,R2-R3,R5,FP,SP" "R1-R3,R5,FP,SP"    "R0-R3,R5,FP,SP"
+                         "R4-R5,FP,SP" "R0,R4-R5,FP,SP" "R1,R4-R5,FP,SP" "R0-R1,R4-R5,FP,SP" "R2,R4-R5,FP,SP" "R0,R2,R4-R5,FP,SP" "R1-R2,R4-R5,FP,SP" "R0-R2,R4-R5,FP,SP"
+                         "R3-R5,FP,SP" "R0,R3-R5,FP,SP" "R1,R3-R5,FP,SP" "R0-R1,R3-R5,FP,SP" "R2-R5,FP,SP"    "R0,R2-R5,FP,SP"    "R1-R5,FP,SP"       "R0-R5,FP,SP"
+];
+
+#@define T_FLAG       "T"
+#@define T_MASK       "0x80"
+#@define T_SHIFT      "15"
+#@define IMASK        "IMASK"
+#@define IMASK_MASK   "0x30"
+#@define IMASK_SHIFT  "8"
+#@define N_FLAG       "N"
+#@define N_MASK       "8"
+#@define N_SHIFT      "3"
+#@define Z_FLAG       "Z"
+#@define Z_MASK       "4"
+#@define Z_SHIFT      "2"
+#@define V_FLAG       "V"
+#@define V_MASK       "2"
+#@define V_SHIFT      "1"
+#@define C_FLAG       "C"
+#@define C_MASK       "1"
+#@define C_SHIFT      "0"
+
+#
+# SR pack and unpack support
+#macro genSRregister() {
+#	SR =
+#    (zext(T)     << $(T_SHIFT))     |
+#    (zext(IMASK) << $(IMASK_SHIFT)) |
+#    (zext(N)     << $(N_SHIFT))     |
+#    (zext(Z)     << $(Z_SHIFT))     |
+#    (zext(V)     << $(V_SHIFT))     |
+#    (zext(C)     << $(C_SHIFT));
+#}
+
+#macro splitSRregister() {
+#
+#	splitTemp:3  = (SR & $(T_MASK))     >> $(T_SHIFT);
+#	T            = splitTemp:1;
+#
+#	splitTemp    = (SR & $(IMASK_MASK)) >> $(IMASK_SHIFT);
+#	IMASK        = splitTemp:1;
+#
+#	splitTemp    = (SR & $(N_MASK))     >> $(N_SHIFT);
+#	N            = splitTemp:1;
+#
+#	splitTemp    = (SR & $(Z_MASK))     >> $(Z_SHIFT);
+#	Z            = splitTemp:1;
+#
+#	splitTemp    = (SR & $(V_MASK))     >> $(V_SHIFT);
+#	V            = splitTemp:1;
+#
+#	splitTemp    = (SR & $(C_MASK))     >> $(C_SHIFT);
+#	C            = splitTemp:1;
+#}
+
+macro SpreadFlags()
+{
+	$(CF) = SR[0,1];
+	$(VF) = SR[1,1];
+	$(ZF) = SR[2,1];
+	$(NF) = SR[3,1];
+}
+
+macro CollectFlags()
+{
+	SR[0,1] = $(CF);
+	SR[1,1] = $(VF);
+	SR[2,1] = $(ZF);
+	SR[3,1] = $(NF);
+}
+
+# spSegment: userop backing the <segmentop> declared in h8539f.pspec
+# (review.md item 8, step 1). Declaring this as a pcodeop is required for
+# SLEIGH to accept spSegment(...) calls below -- the pspec <segmentop
+# userop="spSegment"> tag alone does not implicitly declare the callable
+# symbol; omitting this line fails compilation with "unknown macro, userop,
+# or specific symbol 'spSegment'".
+define pcodeop spSegment;
+
+# fpSegment: REMOVED (review.md item 8, step 2) -- Ghidra only allows one
+# <segmentop> per address space, so FP now reuses spSegment above instead
+# of having its own userop. Same pcode shape, same TP base register.
+
+macro PUSH(val)
+{
+	SP = SP - 2;
+	local ptr24:4 = spSegment(TP, SP);
+	*:2 ptr24 = val;
+}
+
+macro POP(reg)
+{
+	local ptr24:4 = spSegment(TP, SP);
+	reg  = *:2 ptr24;
+	SP   = SP + 2;
+}
+
+macro subflags(op1, op2)
+{
+	result = op1 - op2;
+	$(CF) = op1 < op2;
+	$(VF) = (op1 s> op2) == (result s< 0);
+	$(ZF) = result == 0;
+	$(NF) = result s< 0;
+}
+
+macro subxflags(op1, op2)
+{
+	result = op1 - op2 - zext($(CF));
+	# CF: op2 can be (op2 + CF)
+	# VF: op1 can be (op1 - CF)
+	#cf16:2 = zext($(CF));
+	$(VF) = ((op1 - zext($(CF))) s> op2) == (result s< 0);
+	$(CF) = op1 < (op2 + zext($(CF)));
+	$(ZF) = result == 0;
+	$(NF) = result s< 0;
+}
+
+macro addflags(op1, op2)
+{
+	result = op1 + op2;
+	$(CF) = carry(op1, op2);
+	$(VF) = scarry(op1, op2);
+	$(ZF) = result == 0;
+	$(NF) = result s< 0;
+}
+
+macro CheckDivide(divisor)
+{
+	# Let's ignore all edge cases on divisions for now, because the point of
+	# a division is to divide, and all this seems to confuse the decompiler.
+
+	#if (divisor == 0) goto <Ok>;
+	#$(NF) = 0;
+	#$(VF) = 0;
+	#$(VF) = 0;
+	#$(ZF) = 1;
+	#addr:4 = inst_next;
+	#PUSH(addr[0,16]);
+	#PUSH(addr[16,16]);
+	#PUSH(SR[0,16]);
+	#goto inst_next;
+
+	# # I don't know if exceptions should be encoded in the PCode, but I expect it'll make the decompilation messy, so probably not.
+	# #vectorAddress:4 = *:3 0xD:3; # DIVXU is at 0xC is maximum mode, but offset by 1 to account for the padding up to 32-bit pointers in memory
+	# #call [vectorAddress];
+
+	#<Ok>
+}
+
+macro CheckOverflow8(quotient)
+{
+	# Ignoring edge cases for simplicity.
+	#if (quotient < 0x100) goto <NoOverflow>;
+	#$(VF) = 1;
+	#$(CF) = 0;
+	#$(NF) = 0;
+	#$(ZF) = 0;
+	#goto inst_next;
+	#<NoOverflow>
+}
+
+macro CheckOverflow16(quotient)
+{
+	# Ignoring edge cases for simplicity
+	#if (quotient < 0x10000) goto <NoOverflow>;
+	#$(VF) = 1;
+	#$(CF) = 0;
+	#$(NF) = 0;
+	#$(ZF) = 0;
+	#goto inst_next;
+	#<NoOverflow>
+}
+
+macro stdflags(val)
+{
+	$(NF) = val s< 0;
+	$(ZF) = val == 0;
+	$(VF) = 0;
+}
+
+macro bankify(addr, reg) {
+	dp24:4 = zext(DP);
+	ep24:4 = zext(EP);
+	tp24:4 = zext(TP);
+	add24:4 = zext(addr);
+	add24 = (((zext((reg & 4) == 0) * dp24) | (zext((reg & 6) == 4) * ep24) | (zext((reg & 6) == 6) * tp24)) << 16) | add24;
+	addr = add24;
+}
+
+macro bankifyDP(result, reg) {
+	# Reuses the spSegment segmentop pcodeop (h8539f.pspec <segmentop space="ram"
+	# userop="spSegment">) instead of manually inlining (zext(DP)<<16)|zext(reg).
+	# Same fix pattern as EP (review.md item 9, step 3b): DP is not added to
+	# <constresolve> (TP already holds that one slot Ghidra allows per address
+	# space), so this does not constant-fold DP=0/1 the way the old inline zext
+	# pattern did -- but it is a REAL segmented pointer, not an opaque CALLOTHER,
+	# and critically it stops decompiling as CONCAT12(DP,reg) at every callsite,
+	# since spSegment is a pcodeop/segmentop, not inlined zext/shift/OR pcode.
+	result = spSegment(DP, reg);
+}
+
+macro bankify_dp(addr) {
+	dp32:4 = zext(DP);
+	add32:4 = zext(addr);
+	add32 = (dp32 << 16) | add32;
+	addr = add32;
+}
+
+#macro SetShortAbs8(addr, val) {
+#	ptr:3 = zext(addr) | zext(BR) << 8;
+#	*:1 ptr = val;
+#}
+
+macro SetShortAbs16(addr, val) {
+	ptr:4 = zext(addr) | (zext(BR) << 8);
+	*:2 ptr = val;
+}
+
+#macro setContext(reg, val) {
+#	mask:8 = ~(0xff << ((&reg - 2) * 8));
+#	contextReg = (contextReg & mask) | (zext(val) << ((&reg - 2) * 8));
+#}
+
+cc: "ra" is cond=0 { export 1:1; }
+cc: "rn" is cond=1 { export 0:1; }
+cc: "hi" is cond=2 { tmp:1 = !($(CF) | $(ZF)); export tmp; }
+cc: "ls" is cond=3 { tmp:1 =  $(CF) | $(ZF); export tmp; }
+cc: "hs" is cond=4 { tmp:1 = !$(CF); export tmp; }
+cc: "lo" is cond=5 { tmp:1 =  $(CF); export tmp; }
+cc: "ne" is cond=6 { tmp:1 = !$(ZF); export tmp; }
+cc: "eq" is cond=7 { tmp:1 =  $(ZF); export tmp; }
+cc: "vc" is cond=8 { tmp:1 = !$(VF); export tmp; }
+cc: "vs" is cond=9 { tmp:1 =  $(VF); export tmp; }
+cc: "pl" is cond=10{ tmp:1 = !$(NF); export tmp; }
+cc: "mi" is cond=11{ tmp:1 =  $(NF); export tmp; }
+cc: "ge" is cond=12{ tmp:1 = $(NF) == $(VF); export tmp; } # N ^ Z == 0
+cc: "lt" is cond=13{ tmp:1 = $(NF) != $(VF); export tmp; } # N ^ Z == 1
+cc: "gt" is cond=14{ tmp:1 = !($(ZF) | ($(NF) ^ $(VF))); export tmp; }
+cc: "le" is cond=15{ tmp:1 =  ($(ZF) | ($(NF) ^ $(VF))); export tmp; }
+
+i8:  "#"^imm8^":8"                      is imm8  { export *[const]:1 imm8; }
+i16: "#"^imm16^":16"                    is imm16 { export *[const]:2 imm16; }
+s8:  "#"^disp8^":8"                     is disp8  { export *[const]:1 disp8; }
+s16: "#"^disp16^":16"                   is disp16 { export *[const]:2 disp16; }
+
+# Rs24: register-indirect page target for PJMP/PJSR.
+# Per H8/500 Programming Manual 2.2.33/2.2.34: low byte of Rn -> CP (page),
+# all of Rn+1 -> PC. n must be even (0, 2, 4, or 6=FP/SP pair).
+Rs24: "R0" is Rs = 0 { local addr:4 = (zext(R0:1) << 16) | zext(R1); export addr; }
+Rs24: "R2" is Rs = 2 { local addr:4 = (zext(R2:1) << 16) | zext(R3); export addr; }
+Rs24: "R4" is Rs = 4 { local addr:4 = (zext(R4:1) << 16) | zext(R5); export addr; }
+Rs24: "FP" is Rs = 6 { local addr:4 = (zext(FP:1) << 16) | zext(SP); export addr; }
+Rs32: "R0" is Rs = 0 { value:4 = (zext(R0) << 16) | zext(R1); export value; }
+Rs32: "R2" is Rs = 2 { value:4 = (zext(R2) << 16) | zext(R3); export value; }
+Rs32: "R4" is Rs = 4 { value:4 = (zext(R4) << 16) | zext(R5); export value; }
+Rs32: "FP" is Rs = 6 { value:4 = (zext(FP) << 16) | zext(SP); export value; }
+Rn32: "R0" is Rn = 0 { value:4 = (zext(R0) << 16) | zext(R1); export value; }
+Rn32: "R2" is Rn = 2 { value:4 = (zext(R2) << 16) | zext(R3); export value; }
+Rn32: "R4" is Rn = 4 { value:4 = (zext(R4) << 16) | zext(R5); export value; }
+Rn32: "FP" is Rn = 6 { value:4 = (zext(FP) << 16) | zext(SP); export value; }
+
+addr8_br: addr8 is addr8 {
+	local addr:4 = (zext(BR) << 8) | addr8;
+	export addr;
+}
+
+addr16_dp:        addr16             is addr16 { local addr:4 = (zext(DP) << 16)| (addr16);  export addr; }
+
+# ---------------------------------------------------------------------------
+# BUG 9 fix: MAP4 absolute-addressing entry points (0x05/0x0D/0x15/0x1D).
+# These are literal top-level first bytes (A2[] dispatches them straight into
+# MAP4), NOT opcode47-gated EA bytes -- no EA prefix at all. Real layout:
+#   [literal instr8 byte][addr8/addr16 payload][MAP4 dispatch byte]
+# The dispatch byte reuses the same opcode_special mnemonic values as the
+# existing MAP3/MAP4 single-operand instructions (tst=0x16, clr=0x13, etc.),
+# just addressing a literal absolute address instead of an EA token.
+#
+# Confirmed against live RVR 1998 ROM bytes for the 0x15/0x1D (16-bit
+# absolute) forms, dispatch values 0x16 (tst) and 0x13 (clr):
+#   0x20b10: 1D EF 98 16  -> tst.w @0xEF98:16
+#   0x20d98: 1D EF A2 16  -> tst.w @0xEFA2:16
+#   0x1736d: 15 02 E3 16  -> tst.b @0x02E3:16
+#   0x246c1: 1D F2 52 13  -> clr.w @0xF252:16
+#
+# 0x05/0x0D (8-bit absolute forms) are not yet confirmed against a live
+# instance -- do not add until verified the same way, per README guidance.
+# Other head-table mnemonics (neg/not/tas/shal/shar/shll/shlr/rotl/rotr/
+# rotxl/rotxr) are pending the same per-mnemonic byte verification.
+# ---------------------------------------------------------------------------
+#
+# RESOLUTION (confirmed via full-project sleigh.bat compile): this family is
+# ALREADY IMPLEMENTED. The bytes described above (Rn=5 & mode=0/1 & sz=0/1 in
+# the addrMode token, paired with addr8_br/addr16_dp and opcode_special=0x16
+# for tst / 0x13 for clr) are the exact same physical byte-1 pattern as
+# opcode_special=0x05/0x0D/0x15/0x1D in the `special` token -- addrMode and
+# special both read byte 1, just carved into different fields. See
+# h8539f-arith.sinc's tst.b/tst.w/clr.b/clr.w "@"^addr8_br^":8" /
+# "@"^addr16_dp^":16" constructors (~lines 271-347). Confirmed by the
+# compiler itself: adding opcode_special=0x05/0x0D/0x15/0x1D-gated duplicates
+# here produced "Constructors with identical patterns" errors against those
+# exact lines. No new code needed -- the README's original diagnosis pointed
+# at the wrong file/mechanism, not a real gap.
+# ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+disp8_banked:     disp8              is disp8  & targetBase=0 { local addrLo:2 = (R0 + disp8); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp8_banked:     disp8              is disp8  & targetBase=1 { local addrLo:2 = (R1 + disp8); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp8_banked:     disp8              is disp8  & targetBase=2 { local addrLo:2 = (R2 + disp8); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp8_banked:     disp8              is disp8  & targetBase=3 { local addrLo:2 = (R3 + disp8); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp8_banked:     disp8              is disp8  & targetBase=4 { local addrLo:2 = (R4 + disp8); local addr:4 = spSegment(EP, addrLo);  export addr; }
+disp8_banked:     disp8              is disp8  & targetBase=5 { local addrLo:2 = (R5 + disp8); local addr:4 = spSegment(EP, addrLo);  export addr; }
+disp8_banked:     disp8              is disp8  & targetBase=6 { local addrLo:2 = (FP + disp8); local addr:4 = (zext(TP) << 16) | zext(addrLo);  export addr; }
+disp8_banked:     disp8              is disp8  & targetBase=7 { local addrLo:2 = (SP + disp8); local addr:4 = (zext(TP) << 16) | zext(addrLo);  export addr; }
+
+disp16_banked:    disp16             is disp16 & targetBase=0 { local addrLo:2 = (R0 + disp16); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp16_banked:    disp16             is disp16 & targetBase=1 { local addrLo:2 = (R1 + disp16); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp16_banked:    disp16             is disp16 & targetBase=2 { local addrLo:2 = (R2 + disp16); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp16_banked:    disp16             is disp16 & targetBase=3 { local addrLo:2 = (R3 + disp16); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp16_banked:    disp16             is disp16 & targetBase=4 { local addrLo:2 = (R4 + disp16); local addr:4 = spSegment(EP, addrLo);  export addr; }
+disp16_banked:    disp16             is disp16 & targetBase=5 { local addrLo:2 = (R5 + disp16); local addr:4 = spSegment(EP, addrLo);  export addr; }
+disp16_banked:    disp16             is disp16 & targetBase=6 { local addrLo:2 = (FP + disp16); local addr:4 = (zext(TP) << 16) | zext(addrLo);  export addr; }
+disp16_banked:    disp16             is disp16 & targetBase=7 { local addrLo:2 = (SP + disp16); local addr:4 = (zext(TP) << 16) | zext(addrLo);  export addr; }
+
+#Rn_banked:        Rn                 is Rn { local addr:4 = zext(Rn); bankify(addr, (&:1 Rn) >> 1); export addr; }
+Rn_banked:       "R0"              is Rn=0 { local addr:4; bankifyDP(addr, R0); export addr; }
+Rn_banked:       "R1"              is Rn=1 { local addr:4; bankifyDP(addr, R1); export addr; }
+Rn_banked:       "R2"              is Rn=2 { local addr:4; bankifyDP(addr, R2); export addr; }
+Rn_banked:       "R3"              is Rn=3 { local addr:4; bankifyDP(addr, R3); export addr; }
+Rn_banked:       "R4"              is Rn=4 { local ptr24:4 = spSegment(EP, R4); export ptr24; }
+Rn_banked:       "R5"              is Rn=5 { local ptr24:4 = spSegment(EP, R5); export ptr24; }
+Rn_banked:       "FP"              is Rn=6 { local ptr24:4 = spSegment(TP, FP); export ptr24; }
+Rn_banked:       "SP"              is Rn=7 { local ptr24:4 = spSegment(TP, SP); export ptr24; }
+
+
+Rs_banked:       "R0"              is Rs=0 { local addr:4; bankifyDP(addr, R0); export addr; }
+Rs_banked:       "R1"              is Rs=1 { local addr:4; bankifyDP(addr, R1); export addr; }
+Rs_banked:       "R2"              is Rs=2 { local addr:4; bankifyDP(addr, R2); export addr; }
+Rs_banked:       "R3"              is Rs=3 { local addr:4; bankifyDP(addr, R3); export addr; }
+Rs_banked:       "R4"              is Rs=4 { local ptr24:4 = spSegment(EP, R4); export ptr24; }
+Rs_banked:       "R5"              is Rs=5 { local ptr24:4 = spSegment(EP, R5); export ptr24; }
+Rs_banked:       "FP"              is Rs=6 { local ptr24:4 = spSegment(TP, FP); export ptr24; }
+Rs_banked:       "SP"              is Rs=7 { local ptr24:4 = spSegment(TP, SP); export ptr24; }
+
+r0_push: "R0 " is reglist0=1 { SP = SP - 2; local ptr24:4 = spSegment(TP, SP); *:2 ptr24 = R0; }
+r1_push: "R1 " is reglist1=1 { SP = SP - 2; local ptr24:4 = spSegment(TP, SP); *:2 ptr24 = R1; }
+r2_push: "R2 " is reglist2=1 { SP = SP - 2; local ptr24:4 = spSegment(TP, SP); *:2 ptr24 = R2; }
+r3_push: "R3 " is reglist3=1 { SP = SP - 2; local ptr24:4 = spSegment(TP, SP); *:2 ptr24 = R3; }
+r4_push: "R4 " is reglist4=1 { SP = SP - 2; local ptr24:4 = spSegment(TP, SP); *:2 ptr24 = R4; }
+r5_push: "R5 " is reglist5=1 { SP = SP - 2; local ptr24:4 = spSegment(TP, SP); *:2 ptr24 = R5; }
+fp_push: "FP " is reglist6=1 { SP = SP - 2; local ptr24:4 = spSegment(TP, SP); *:2 ptr24 = FP; }
+sp_push: "SP " is reglist7=1 { SP = SP - 2; local ptr24:4 = spSegment(TP, SP); *:2 ptr24 = SP; }
+r0_push:       is reglist0=0 { }
+r1_push:       is reglist1=0 { }
+r2_push:       is reglist2=0 { }
+r3_push:       is reglist3=0 { }
+r4_push:       is reglist4=0 { }
+r5_push:       is reglist5=0 { }
+fp_push:       is reglist6=0 { }
+sp_push:       is reglist7=0 { }
+sp_pop:  "SP " is reglist7=1 { local ptr24:4 = spSegment(TP, SP); SP = *:2 ptr24; }
+fp_pop:  "FP " is reglist6=1 { local ptr24:4 = spSegment(TP, SP); FP = *:2 ptr24; SP = SP + 2; }
+r5_pop:  "R5 " is reglist5=1 { local ptr24:4 = spSegment(TP, SP); R5 = *:2 ptr24; SP = SP + 2; }
+r4_pop:  "R4 " is reglist4=1 { local ptr24:4 = spSegment(TP, SP); R4 = *:2 ptr24; SP = SP + 2; }
+r3_pop:  "R3 " is reglist3=1 { local ptr24:4 = spSegment(TP, SP); R3 = *:2 ptr24; SP = SP + 2; }
+r2_pop:  "R2 " is reglist2=1 { local ptr24:4 = spSegment(TP, SP); R2 = *:2 ptr24; SP = SP + 2; }
+r1_pop:  "R1 " is reglist1=1 { local ptr24:4 = spSegment(TP, SP); R1 = *:2 ptr24; SP = SP + 2; }
+r0_pop:  "R0 " is reglist0=1 { local ptr24:4 = spSegment(TP, SP); R0 = *:2 ptr24; SP = SP + 2; }
+r0_pop:        is reglist0=0 { }
+r1_pop:        is reglist1=0 { }
+r2_pop:        is reglist2=0 { }
+r3_pop:        is reglist3=0 { }
+r4_pop:        is reglist4=0 { }
+r5_pop:        is reglist5=0 { }
+fp_pop:        is reglist6=0 { }
+sp_pop:        is reglist7=0 { }
+
+eab_direct:       Rn                        is Rn & mode = 10 & sz = 0            { export Rn; } # exports whole 16-bit register; make sure to always use :1 or [0,8] in tables that reference this
+eaw_direct:       Rn                        is Rn & mode = 10 & sz = 1            { export Rn; }
+eab_indirect:     "@"^Rn_banked             is Rn_banked & mode = 13 & sz = 0     { export *:1 Rn_banked; }
+eaw_indirect:     "@"^Rn_banked             is Rn_banked & mode = 13 & sz = 1     { export *:2 Rn_banked; }
+eab_disp8:        "@("^disp8^":8,R0)"   is Rn = 0 & mode = 14 & sz = 0; disp8     { local off:2 = R0 + disp8; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R1)"   is Rn = 1 & mode = 14 & sz = 0; disp8     { local off:2 = R1 + disp8; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R2)"   is Rn = 2 & mode = 14 & sz = 0; disp8     { local off:2 = R2 + disp8; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R3)"   is Rn = 3 & mode = 14 & sz = 0; disp8     { local off:2 = R3 + disp8; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R4)"   is Rn = 4 & mode = 14 & sz = 0; disp8     { local off:2 = R4 + disp8; local a:4 = spSegment(EP, off); export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R5)"   is Rn = 5 & mode = 14 & sz = 0; disp8     { local off:2 = R5 + disp8; local a:4 = spSegment(EP, off); export *:1 a; }
+eaw_disp8:        "@("^disp8^":8,R0)"   is Rn = 0 & mode = 14 & sz = 1; disp8     { local off:2 = R0 + disp8; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R1)"   is Rn = 1 & mode = 14 & sz = 1; disp8     { local off:2 = R1 + disp8; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R2)"   is Rn = 2 & mode = 14 & sz = 1; disp8     { local off:2 = R2 + disp8; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R3)"   is Rn = 3 & mode = 14 & sz = 1; disp8     { local off:2 = R3 + disp8; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R4)"   is Rn = 4 & mode = 14 & sz = 1; disp8     { local off:2 = R4 + disp8; local a:4 = spSegment(EP, off); export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R5)"   is Rn = 5 & mode = 14 & sz = 1; disp8     { local off:2 = R5 + disp8; local a:4 = spSegment(EP, off); export *:2 a; }
+eab_disp16:       "@("^disp16^":16,R0)" is Rn = 0 & mode = 15 & sz = 0; disp16    { local off:2 = R0 + disp16; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R1)" is Rn = 1 & mode = 15 & sz = 0; disp16    { local off:2 = R1 + disp16; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R2)" is Rn = 2 & mode = 15 & sz = 0; disp16    { local off:2 = R2 + disp16; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R3)" is Rn = 3 & mode = 15 & sz = 0; disp16    { local off:2 = R3 + disp16; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R4)" is Rn = 4 & mode = 15 & sz = 0; disp16    { local off:2 = R4 + disp16; local a:4 = spSegment(EP, off); export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R5)" is Rn = 5 & mode = 15 & sz = 0; disp16    { local off:2 = R5 + disp16; local a:4 = spSegment(EP, off); export *:1 a; }
+eaw_disp16:       "@("^disp16^":16,R0)" is Rn = 0 & mode = 15 & sz = 1; disp16    { local off:2 = R0 + disp16; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R1)" is Rn = 1 & mode = 15 & sz = 1; disp16    { local off:2 = R1 + disp16; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R2)" is Rn = 2 & mode = 15 & sz = 1; disp16    { local off:2 = R2 + disp16; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R3)" is Rn = 3 & mode = 15 & sz = 1; disp16    { local off:2 = R3 + disp16; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R4)" is Rn = 4 & mode = 15 & sz = 1; disp16    { local off:2 = R4 + disp16; local a:4 = spSegment(EP, off); export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R5)" is Rn = 5 & mode = 15 & sz = 1; disp16    { local off:2 = R5 + disp16; local a:4 = spSegment(EP, off); export *:2 a; }
+# FP/SP displacement operands: add the displacement to the 16-bit offset BEFORE applying the segment (matches disp8_banked above),
+# so the decompiler sees SEGMENTOP(TP, FP+disp) rather than SEGMENTOP(TP, FP) + disp.
+eab_disp8: "@("^disp8^":8,FP)" is Rn = 6 & mode = 14 & sz = 0; disp8 { local off:2 = FP + disp8; local a:4 = spSegment(TP, off); export *:1 a; }
+eaw_disp8: "@("^disp8^":8,FP)" is Rn = 6 & mode = 14 & sz = 1; disp8 { local off:2 = FP + disp8; local a:4 = spSegment(TP, off); export *:2 a; }
+eab_disp16: "@("^disp16^":16,FP)" is Rn = 6 & mode = 15 & sz = 0; disp16 { local off:2 = FP + disp16; local a:4 = spSegment(TP, off); export *:1 a; }
+eaw_disp16: "@("^disp16^":16,FP)" is Rn = 6 & mode = 15 & sz = 1; disp16 { local off:2 = FP + disp16; local a:4 = spSegment(TP, off); export *:2 a; }
+eab_disp8: "@("^disp8^":8,SP)" is Rn = 7 & mode = 14 & sz = 0; disp8 { local off:2 = SP + disp8; local a:4 = spSegment(TP, off); export *:1 a; }
+eaw_disp8: "@("^disp8^":8,SP)" is Rn = 7 & mode = 14 & sz = 1; disp8 { local off:2 = SP + disp8; local a:4 = spSegment(TP, off); export *:2 a; }
+eab_disp16: "@("^disp16^":16,SP)" is Rn = 7 & mode = 15 & sz = 0; disp16 { local off:2 = SP + disp16; local a:4 = spSegment(TP, off); export *:1 a; }
+eaw_disp16: "@("^disp16^":16,SP)" is Rn = 7 & mode = 15 & sz = 1; disp16 { local off:2 = SP + disp16; local a:4 = spSegment(TP, off); export *:2 a; }
+
+# ---------------------------------------------------------------------------
+# predec/postinc (mode=11/12), all 8 registers (BUG: collision+mutation fix).
+# ana.cpp's phrase() does `code & 7` uniformly -- there is no separate SP path
+# at the hardware level, R7 is just decremented/incremented like any other
+# register (it prints as "SP" purely cosmetically). The previous code had a
+# dedicated "Rn=7 & mode=.. => @-SP/@SP+" constructor PLUS a generic
+# "Rn_banked & mode=.." constructor whose own Rn=7 alternative ALSO produced
+# "SP" -- an exact duplicate bit-pattern collision (mode/sz/Rn=7 matched both),
+# which is why any predec/postinc instruction targeting R7 failed to resolve.
+# The generic version was additionally buggy: it assigned to `Rn_banked`,
+# which is a computed bank ADDRESS (e.g. DP<<16|R0), not the underlying
+# register -- "Rn_banked = Rn_banked - 2" never actually decremented the real
+# register. Fixed by writing one constructor per register that mutates the
+# real register directly, then banks the (already-updated, for predec; or
+# pre-update, for postinc) value for export. SP now uses a disposable local
+# (spSegment(TP,SP)) on export too, same as every other register here --
+# SP itself is only ever touched by direct SP +/- n arithmetic, which is what
+# lets Ghidra's stack-frame analyzer recognize it as the real stack pointer
+# (see h8539f.cspec's <stackpointer> and review.md item 8's Z180 precedent).
+# ---------------------------------------------------------------------------
+eab_predec:       "@-R0"    is Rn=0 & mode = 11 & sz = 0 { R0 = R0 - 1; local addr:4; bankifyDP(addr, R0); export *:1 addr; }
+eab_predec:       "@-R1"    is Rn=1 & mode = 11 & sz = 0 { R1 = R1 - 1; local addr:4; bankifyDP(addr, R1); export *:1 addr; }
+eab_predec:       "@-R2"    is Rn=2 & mode = 11 & sz = 0 { R2 = R2 - 1; local addr:4; bankifyDP(addr, R2); export *:1 addr; }
+eab_predec:       "@-R3"    is Rn=3 & mode = 11 & sz = 0 { R3 = R3 - 1; local addr:4; bankifyDP(addr, R3); export *:1 addr; }
+eab_predec:       "@-R4"    is Rn=4 & mode = 11 & sz = 0 { R4 = R4 - 1; local ptr24:4 = spSegment(EP, R4); export *:1 ptr24; }
+eab_predec:       "@-R5"    is Rn=5 & mode = 11 & sz = 0 { R5 = R5 - 1; local ptr24:4 = spSegment(EP, R5); export *:1 ptr24; }
+eab_predec:       "@-FP"    is Rn=6 & mode = 11 & sz = 0 { FP = FP - 1; local ptr24:4 = spSegment(TP, FP); export *:1 ptr24; }
+eab_predec:       "@-SP"    is Rn=7 & mode = 11 & sz = 0 { SP = SP - 1; local ptr24:4 = spSegment(TP, SP); export *:1 ptr24; }
+
+eaw_predec:       "@-R0"    is Rn=0 & mode = 11 & sz = 1 { R0 = R0 - 2; local addr:4; bankifyDP(addr, R0); export *:2 addr; }
+eaw_predec:       "@-R1"    is Rn=1 & mode = 11 & sz = 1 { R1 = R1 - 2; local addr:4; bankifyDP(addr, R1); export *:2 addr; }
+eaw_predec:       "@-R2"    is Rn=2 & mode = 11 & sz = 1 { R2 = R2 - 2; local addr:4; bankifyDP(addr, R2); export *:2 addr; }
+eaw_predec:       "@-R3"    is Rn=3 & mode = 11 & sz = 1 { R3 = R3 - 2; local addr:4; bankifyDP(addr, R3); export *:2 addr; }
+eaw_predec:       "@-R4"    is Rn=4 & mode = 11 & sz = 1 { R4 = R4 - 2; local ptr24:4 = spSegment(EP, R4); export *:2 ptr24; }
+eaw_predec:       "@-R5"    is Rn=5 & mode = 11 & sz = 1 { R5 = R5 - 2; local ptr24:4 = spSegment(EP, R5); export *:2 ptr24; }
+eaw_predec:       "@-FP"    is Rn=6 & mode = 11 & sz = 1 { FP = FP - 2; local ptr24:4 = spSegment(TP, FP); export *:2 ptr24; }
+eaw_predec:       "@-SP"    is Rn=7 & mode = 11 & sz = 1 { SP = SP - 2; local ptr24:4 = spSegment(TP, SP); export *:2 ptr24; }
+
+eab_postinc:      "@R0+"    is Rn=0 & mode = 12 & sz = 0 { local addr:4; bankifyDP(addr, R0); R0 = R0 + 1; export *:1 addr; }
+eab_postinc:      "@R1+"    is Rn=1 & mode = 12 & sz = 0 { local addr:4; bankifyDP(addr, R1); R1 = R1 + 1; export *:1 addr; }
+eab_postinc:      "@R2+"    is Rn=2 & mode = 12 & sz = 0 { local addr:4; bankifyDP(addr, R2); R2 = R2 + 1; export *:1 addr; }
+eab_postinc:      "@R3+"    is Rn=3 & mode = 12 & sz = 0 { local addr:4; bankifyDP(addr, R3); R3 = R3 + 1; export *:1 addr; }
+eab_postinc:      "@R4+"    is Rn=4 & mode = 12 & sz = 0 { local ptr24:4 = spSegment(EP, R4); R4 = R4 + 1; export *:1 ptr24; }
+eab_postinc:      "@R5+"    is Rn=5 & mode = 12 & sz = 0 { local ptr24:4 = spSegment(EP, R5); R5 = R5 + 1; export *:1 ptr24; }
+eab_postinc:      "@FP+"    is Rn=6 & mode = 12 & sz = 0 { local ptr24:4 = spSegment(TP, FP); FP = FP + 1; export *:1 ptr24; }
+eab_postinc:      "@SP+"    is Rn=7 & mode = 12 & sz = 0 { local ptr24:4 = spSegment(TP, SP); SP = SP + 1; export *:1 ptr24; }
+
+eaw_postinc:      "@R0+"    is Rn=0 & mode = 12 & sz = 1 { local addr:4; bankifyDP(addr, R0); R0 = R0 + 2; export *:2 addr; }
+eaw_postinc:      "@R1+"    is Rn=1 & mode = 12 & sz = 1 { local addr:4; bankifyDP(addr, R1); R1 = R1 + 2; export *:2 addr; }
+eaw_postinc:      "@R2+"    is Rn=2 & mode = 12 & sz = 1 { local addr:4; bankifyDP(addr, R2); R2 = R2 + 2; export *:2 addr; }
+eaw_postinc:      "@R3+"    is Rn=3 & mode = 12 & sz = 1 { local addr:4; bankifyDP(addr, R3); R3 = R3 + 2; export *:2 addr; }
+eaw_postinc:      "@R4+"    is Rn=4 & mode = 12 & sz = 1 { local ptr24:4 = spSegment(EP, R4); R4 = R4 + 2; export *:2 ptr24; }
+eaw_postinc:      "@R5+"    is Rn=5 & mode = 12 & sz = 1 { local ptr24:4 = spSegment(EP, R5); R5 = R5 + 2; export *:2 ptr24; }
+eaw_postinc:      "@FP+"    is Rn=6 & mode = 12 & sz = 1 { local ptr24:4 = spSegment(TP, FP); FP = FP + 2; export *:2 ptr24; }
+eaw_postinc:      "@SP+"    is Rn=7 & mode = 12 & sz = 1 { local ptr24:4 = spSegment(TP, SP); SP = SP + 2; export *:2 ptr24; }
+#eab_abs8:         "@"^addr8^":8"            is Rn = 5 & mode = 0 & sz = 0; addr8  { export *:1 addr8; }
+#eaw_abs8:         "@"^addr8^":8"            is Rn = 5 & mode = 0 & sz = 1; addr8  { export *:2 addr8; }
+eab_abs8_br:      "@"^addr8_br^":8"         is Rn = 5 & mode = 0 & sz = 0; addr8_br      { export *:1 addr8_br; }
+eaw_abs8_br:      "@"^addr8_br^":8"         is Rn = 5 & mode = 0 & sz = 1; addr8_br      { export *:2 addr8_br; }
+eab_abs16:        "@"^addr16_dp^":16"   is Rn = 5 & mode = 1 & sz = 0; addr16_dp { export *:1 addr16_dp; }
+#eab_abs16: "@"^addr16_dp^":16"   is Rn = 5 & mode = 1 & sz = 0; addr16_dp { export *:1 addr16_dp; }
+eaw_abs16:        "@"^addr16_dp^":16"   is Rn = 5 & mode = 1 & sz = 1; addr16_dp { export *:2 addr16_dp; }
+
+# ---------------------------------------------------------------------------
+# Byte-2-scoped EA subtables (BUG 5 fix v2).
+#
+# Problem: eab_direct/eaw_direct/etc. above are built on the `addrMode` token
+# (Rn/Rnb/sz/mode, all bits of byte 1). `map3_page`/`map4_page` gate on
+# `opcode47`, a field of the *separate* `instr8` token, also read from byte 1.
+# Chaining "is map3_page; eab_direct; opcode_special=0x16" compiles (no error)
+# but does not match at runtime: confirmed on real ROM bytes 0xA8 0x16, which
+# still resolved as `?? A8h`. Root cause (see README BUG 5 "BLOCKER FOUND"):
+# `eab_direct` was authored as a standalone first-byte matcher and is reused
+# elsewhere (e.g. plain `mov.b` MAP2 forms) at byte 1, so SLEIGH's decision
+# tree for the `addrMode` token does not shift to byte 2 just because a
+# `map3_page` subtable happens to precede it in one particular constructor.
+#
+# Fix: define a brand-new token `addrMode2`, identical bit layout to
+# `addrMode`, used ONLY by the `_2`-suffixed subtables below. Because these
+# subtables and this token are never referenced anywhere at byte 1, SLEIGH
+# has no conflicting byte-1 usage to reconcile against, and the token simply
+# reads from whatever byte is next once `map3_page`/`map4_page` (each built
+# on `instr8`, not `addrMode`/`addrMode2`) has already consumed byte 1.
+#
+# Usage in a MAP3/MAP4 single-operand constructor:
+#   :tst.b  eab_direct2  is map3_page; eab_direct2; opcode_special=0x16
+#       { stdflags(eab_direct2); }
+#
+# These are byte-for-byte identical to the eab_*/eaw_* forms above except for
+# the token/field names (Rn2/Rnb2/sz2/mode2 instead of Rn/Rnb/sz/mode, and
+# Rn_banked2 instead of Rn_banked). disp8/disp16/addr8/addr16/addr8_br/
+# addr16_dp are untouched -- those are already independent tokens with no
+# byte-1 collision, so they're reused as-is by the _2 forms below.
+# ---------------------------------------------------------------------------
+
+define token addrMode2(8)
+	Rn2   = (0, 2)
+	Rnb2  = (0, 2)
+	sz2   = (3, 3)
+	mode2 = (4, 7)
+;
+attach variables [ Rn2 ] [ R0 R1 R2 R3 R4 R5 FP SP ];
+
+Rn_banked2:      "R0"              is Rn2=0 { local addr:4; bankifyDP(addr, R0); export addr; }
+Rn_banked2:      "R1"              is Rn2=1 { local addr:4; bankifyDP(addr, R1); export addr; }
+Rn_banked2:      "R2"              is Rn2=2 { local addr:4; bankifyDP(addr, R2); export addr; }
+Rn_banked2:      "R3"              is Rn2=3 { local addr:4; bankifyDP(addr, R3); export addr; }
+Rn_banked2:      "R4"              is Rn2=4 { local ptr24:4 = spSegment(EP, R4); export ptr24; }
+Rn_banked2:      "R5"              is Rn2=5 { local ptr24:4 = spSegment(EP, R5); export ptr24; }
+Rn_banked2:      "FP"              is Rn2=6 { local ptr24:4 = spSegment(TP, FP); export ptr24; }
+Rn_banked2:      "SP"              is Rn2=7 { local ptr24:4 = spSegment(TP, SP); export ptr24; }
+
+eab_direct2:      Rn2                       is Rn2 & mode2 = 10 & sz2 = 0         { export Rn2; } # see eab_direct note above re: :1/[0,8] usage
+eaw_direct2:      Rn2                       is Rn2 & mode2 = 10 & sz2 = 1         { export Rn2; }
+eab_indirect2:    "@"^Rn_banked2            is Rn_banked2 & mode2 = 13 & sz2 = 0  { export *:1 Rn_banked2; }
+eaw_indirect2:    "@"^Rn_banked2            is Rn_banked2 & mode2 = 13 & sz2 = 1  { export *:2 Rn_banked2; }
+eab_disp8_2:      "@("^disp8^":8,"^Rn_banked2^")"   is Rn_banked2 & mode2 = 14 & sz2 = 0; disp8     { tmp = (Rn_banked2 + disp8);  export *:1 tmp; }
+eaw_disp8_2:      "@("^disp8^":8,"^Rn_banked2^")"   is Rn_banked2 & mode2 = 14 & sz2 = 1; disp8     { tmp = (Rn_banked2 + disp8);  export *:2 tmp; }
+eab_disp16_2:     "@("^disp16^":16,"^Rn_banked2^")" is Rn_banked2 & mode2 = 15 & sz2 = 0; disp16    { tmp = (Rn_banked2 + disp16); export *:1 tmp; }
+eaw_disp16_2:     "@("^disp16^":16,"^Rn_banked2^")" is Rn_banked2 & mode2 = 15 & sz2 = 1; disp16    { tmp = (Rn_banked2 + disp16); export *:2 tmp; }
+eab_predec2:      "@-SP"                    is Rn2=7 & mode2 = 11 & sz2 = 0       { SP = SP - 2; local ptr24:4 = spSegment(TP, SP); export *:1 ptr24; }
+eaw_predec2:      "@-SP"                    is Rn2=7 & mode2 = 11 & sz2 = 1       { SP = SP - 2; local ptr24:4 = spSegment(TP, SP); export *:2 ptr24; }
+eab_postinc2:     "@SP+"                    is Rn2=7 & mode2 = 12 & sz2 = 0       { local ptr24:4 = spSegment(TP, SP); tmp = ptr24; SP = SP + 2; export *:1 tmp; }
+eaw_postinc2:     "@SP+"                    is Rn2=7 & mode2 = 12 & sz2 = 1       { local ptr24:4 = spSegment(TP, SP); tmp = ptr24; SP = SP + 2; export *:2 tmp; }
+eab_predec2:      "@-"^Rn_banked2           is Rn_banked2 & mode2 = 11 & sz2 = 0  { Rn_banked2 = Rn_banked2 - 1; export *:1 Rn_banked2; }
+eaw_predec2:      "@-"^Rn_banked2           is Rn_banked2 & mode2 = 11 & sz2 = 1  { Rn_banked2 = Rn_banked2 - 2; export *:2 Rn_banked2; }
+eab_postinc2:     "@"^Rn_banked2^"+"        is Rn_banked2 & mode2 = 12 & sz2 = 0  { tmp = Rn_banked2; Rn_banked2 = Rn_banked2 + 1; export *:1 tmp; }
+eaw_postinc2:     "@"^Rn_banked2^"+"        is Rn_banked2 & mode2 = 12 & sz2 = 1  { tmp = Rn_banked2; Rn_banked2 = Rn_banked2 + 1; export *:2 tmp; }
+eab_abs8_br2:     "@"^addr8_br^":8"         is Rn2 = 5 & mode2 = 0 & sz2 = 0; addr8_br   { export *:1 addr8_br; }
+eaw_abs8_br2:     "@"^addr8_br^":8"         is Rn2 = 5 & mode2 = 0 & sz2 = 1; addr8_br   { export *:2 addr8_br; }
+eab_abs16_2:      "@"^addr16_dp^":16"       is Rn2 = 5 & mode2 = 1 & sz2 = 0; addr16_dp  { export *:1 addr16_dp; }
+eaw_abs16_2:      "@"^addr16_dp^":16"       is Rn2 = 5 & mode2 = 1 & sz2 = 1; addr16_dp  { export *:2 addr16_dp; }
+#eaw_abs16: "@"^addr16_dp^":16"   is Rn = 5 & mode = 1 & sz = 1; addr16_dp { export *:2 addr16_dp; }
+eab_imm8:         i8                        is Rn=4 & sz=0 & mode=0; i8           { export *[const]:1 i8; }
+eaw_imm16:        i16                       is Rn=4 & sz=1 & mode=0; i16          { export *[const]:2 i16; }
+
+reloffs8:  reloc is disp8        [ reloc=(inst_next & 0xFF0000) | ((inst_next+disp8)  & 0xFFFF); ] { export * reloc; }
+reloffs16: reloc is disp16       [ reloc=(inst_next & 0xFF0000) | ((inst_next+disp16) & 0xFFFF); ] { export * reloc; }
+
+
+# MOV:G <EAs>,Rd           Move data from source to destination, general format
+#       N: Rd s< 0
+#       Z: Rd == 0
+#       V: 0
+# DEAD (removed July 2026, see README "RESOLVED" entry): eab_imm8-gated mov:"g.b" --
+# byte1=0x04 is exclusively the MAP5 escape (A2[4] in ana.cpp), never a MAP3/4
+# tail-dispatch EA submode. Unreachable. MAP5 escape-gated replacement pending.
+# DEAD (removed July 2026): eaw_imm16-gated mov:"g.w" -- byte1=0x0C is the MAP5
+# escape (A2[12]), unreachable as a MAP3/4 EA submode. MAP5 replacement pending.
+
+# MOV:G Rs,<EAd>           Move data from source to destination, general format
+#       N: Rs s< 0
+#       Z: Rs == 0
+#       V: 0
+# DEAD (removed July 2026): eab_imm8-gated mov:"g.b" store form -- byte1=0x04 is
+# the MAP5 escape, unreachable here. MAP5 replacement pending.
+# DEAD (removed July 2026): eaw_imm16-gated mov:"g.w" store form -- byte1=0x0C is
+# the MAP5 escape, unreachable here. MAP5 replacement pending.
+
+# MOV:G #xx,<EAd>          Move data from source to destination, general format
+#       N: xx s< 0
+#       Z: xx == 0
+#       V: 0
+# If the immediate data length is 8 bits but word size is specified in the <EA> field,
+# the sign bit of the immediate data is extended and 16 bits of data are transferred.
+# according to IDA Pro, storing a 16-bit immediate in an 8-bit register is valid assembly,
+# but I do not know how it executes (if indeed it does).
+# For the sake of brevity, let's just assume it stores the low byte
+
+# MOV:G MAP4 variants (first byte 0xE0-0xEF, opcode47=14)
+#
+# Byte 1 (0xE0-0xEF): instr8 token — opcode47=14 identifies MAP4 dispatch.
+#                     Bits[2:0] of byte 1 are the MAP4 page-select index (ignored here).
+# Byte 2: map4b token — m4op[7:4] selects operation; m4Rn[2:0] is the register operand;
+#                       m4sz[3] distinguishes byte (0) from word (1) for immediate forms.
+# Byte 3+: immediate data if applicable.
+#
+# Constructors put opcode47=14 on the instr8 token (byte 1) first, then the map4b
+# constraints after the semicolon (byte 2).  This avoids the "Mismatched tokens"
+# error that occurs when EA subtables (which anchor addrMode as their leading token)
+# are placed before opcode47 in the pattern.
+#
+# --- MAP4 immediate-to-register forms ---
+# m4op=0, m4sz=0: mov:g.b #imm8, Rn  (byte 2 = 0x00-0x07, byte 3 = imm8)
+# Covers the failing EE 06 04 case: byte1=0xEE, byte2=0x06 (m4op=0,m4sz=0,m4Rn=6=R6),
+# byte3=0x04 → mov:g.b #0x4:8, R6
+# m4op=0, m4sz=1: mov:g.w #imm8 (sign-extended), Rn  (byte 2 = 0x08-0x0F)
+# m4op=1, m4sz=0: mov:g.w #imm16, Rn  (byte 2 = 0x10-0x17, bytes 3-4 = imm16)
+
+# BUG 4b (removed, July 2026): this used to be a map4_page-gated mov:g.b/
+# ldc/stc block for second bytes 0x80-0x9F. Deleted entirely, not fixed --
+# compile-testing the EA-dispatch fix (see README) surfaced "Constructors
+# with identical patterns" errors against the MOV:G <EAs>,Rd / Rs,<EAd>
+# block below (opcode=16/18 & Rd/Rs) and the ldc.b/stc.b block further down
+# (opcode=17/19 & CR8). Root cause: mov_g/ldc/stc are NOT MAP4-exclusive --
+# per the ground-truth table they're shared across MAP3/4/5, and the
+# opcode=16-19 family below already covers every EA submode (mode 10-15,
+# i.e. MAP3's single direct form through MAP4's five indirect/disp/predec/
+# postinc forms) via eab_*/eaw_* gating on byte 1 directly, with byte 2's
+# plain opcode+Rd/Rs/CR8 fields -- numerically identical to map4b's
+# m4op*2+m4sz reconstruction. This block was 100% dead duplicate weight.
+
+
+# ADD:G <EAs>,Rd           Add, general format
+#       N: result s< 0
+#       Z: result == 0
+#       V: signed overflow: signed computed result is not the same as the mathematical result assuming signed inputs
+#       C: unsigned overflow: result u< Rd_original
+# DEAD (removed July 2026): eab_imm8-gated add:"g.b" -- byte1=0x04 is the MAP5
+# escape, unreachable as a MAP3/4 EA submode. MAP5 replacement pending (arith.sinc scope).
+# DEAD (removed July 2026): eaw_imm16-gated add:"g.w" -- byte1=0x0C is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope).
+
+# SUB   <EAs>,Rd           Subtract binary
+#       N: result s< 0
+#       Z: result == 0
+#       V: signed overflow: signed computed result is not the same as the mathematical result assuming signed inputs
+#       C: unsigned borrow: result u> Rd_original
+# DEAD (removed July 2026): eab_imm8-gated sub.b -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope).
+# DEAD (removed July 2026): eaw_imm16-gated sub.w -- byte1=0x0C is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope).
+
+# SUBS  <EAs>,Rd           Subtract with sign extension
+#       no flags
+# DEAD (removed July 2026): eab_imm8-gated subs.b -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope).
+# DEAD (removed July 2026): eaw_imm16-gated subs.w -- byte1=0x0C is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope).
+
+# SUBX  <EAs>,Rd           Subtract binary
+#       N: result s< 0
+#       Z: result == 0
+#       V: signed overflow: signed computed result is not the same as the mathematical result assuming signed inputs
+#       C: unsigned borrow: result u> Rd_original
+# DEAD (removed July 2026): eab_imm8-gated subx.b -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope).
+# DEAD (removed July 2026): eaw_imm16-gated subx.w -- byte1=0x0C is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope).
+
+# ADDS  <EAs>,Rd           Add with sign extension
+#       no flags
+# DEAD (removed July 2026): eab_imm8-gated adds.b -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope).
+# DEAD (removed July 2026): eaw_imm16-gated adds.w -- byte1=0x0C is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope).
+
+# ADDX  <EAs>,Rd           Add with extended carry
+#       N: result s< 0
+#       Z: result == 0
+#       V: signed overflow: signed computed result is not the same as the mathematical result assuming signed inputs
+#       C: unsigned overflow: result u< Rd_original
+# 8-bit values are sign-extended into 16-bit destination registers
+# DEAD (removed July 2026): eab_imm8-gated addx.b -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope).
+# DEAD (removed July 2026): eaw_imm16-gated addx.w -- byte1=0x0C is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope).
+
+# ADD:Q #xx,<EAd>          Add quick, short format
+#       N: result s< 0
+#       Z: result == 0
+#       V: signed overflow: signed computed result is not the same as the mathematical result assuming signed inputs (e.g., 127 + 1 = -128)
+#       C: unsigned overflow: result u< Rd_original (e.g., 255 + 1 = 0)
+# The immediate value is determined by bits 0 and 2 of the opcode byte, but I couldn't find a clever way to use those bits directly, so I wrote the tables for -2,-1,+1,+2 individually.
+# +1
+
+# +2
+
+# -1
+
+# -2
+
+# DADD  Rs,Rd              Decimal (BCD) add with extended carry
+#       Z: Z == 1 && result == 0
+#       C: decimal carry occurred (mathematical result > 99)
+# If I understand correctly, this instruction does exist and will compute with Word operands, but "correct results are not assured."
+# I have not included a word-size version in this language spec, because I don't know how it will work.
+
+# DSUB  Rs,Rd              Decimal (BCD) subtract with extended carry
+#       Z: Z == 1 && result == 0
+#       C: decimal borrow occurred (mathematical result < 0)
+# If I understand correctly, this instruction does exist and will compute with Word operands, but "correct results are not assured."
+# I have not included a word-size version in this language spec, because I don't know how it will work.
+
+# STC   CR,<EAd>           Store control register
+#       no flags
+# stc.b BR/EP/DP — named like the existing CCR and TP constructors above
+# CR16 attach table: [ SR _ _ _ _ _ _ _ ] — only index 0 (SR) is valid.
+# Generic stc.w CR16 fallback constructors removed (BUG 7 fix): they used a
+# bare CR16 attach operand with no index guard, producing varnode errors on
+# hole indices 1-7. SR is already fully covered by the explicit stc.w "SR"
+# constructors above (lines 888-895), so these fallbacks are redundant.
+
+# STM   <regs>,@-SP        Store multiple registers
+#       no flags
+
+# LDM   @SP+,<regs>        Load to multiple registers
+#       no flags
+
+# XCH   Rs,Rd              Exchange registers
+#       no flags
+# MAP3 tail 0x90-97 only (ana.cpp A3tail line 66); MAP4's 0x90-97 is mov_g
+# instead (A4tail line 92), so this is exclusively gated on eab/eaw_direct
+# (mode=10), never collides with the mov:g.b/w store block (which starts at
+# eab/eaw_predec, mode=11). BUG (fixed): the original .w-only version wrote
+# "eaw_direct = Rd" *after* "Rd = eaw_direct" had already clobbered Rd, so
+# eaw_direct was written back with its own unchanged value and the swap
+# never actually happened -- eaw_direct=tmp fixes it. Added the .b form,
+# missing entirely before.
+
+# MOVFPE  @EA,Rd            Move from peripheral EA into a GPR
+# MOVTPE  Rs,@EA            Move a GPR out to peripheral EA
+#       no flags
+# Ground truth: ana.cpp A6tail lines 143-144 (movfpe=group 0x80-87, movtpe=
+# group 0x90-97), only reachable via the nested MAP3-then-MAP6 / MAP4-then-
+# MAP6 path (A3[0]/A4[0]=MAP6, ana.cpp lines 51/77) -- byte 1 is the same
+# eab_*/eaw_* EA gate as mov_g/ldc/stc/xch (mode=10 for MAP3, mode=11-15 for
+# MAP4), byte 2 is a fixed 0x00 marker (opcode_special=0), byte 3 is m6b's
+# own dispatch+register. movtpe swaps operand order (Rs first) per the
+# ana.cpp H8500_movtpe case falling through from H8500_stc's swap (line
+# 600-607); movfpe does not swap. Neither uses the ldc/stc +SR register
+# offset -- m6Rn is a plain GPR attach.
+
+
+# SWAP  Rd                 Swap register halves
+#       N: result s< 0
+#       Z: result == 0
+#       V: 0
+# The encoding specifies byte-sized registers, but since we pass the full word down in eab_direct, we should be able to use eab_direct instead of manually encoding the address mode with Rn
+
+# BCLR  Rs,<EAd>           Bit test and clear
+#       Z: EAd_orig[Rs] == 0
+
+# BCLR  #xx,<EAd>          Bit test and clear
+#       Z: EAd_orig[xx] == 0
+
+# BSET  RS,<EAd>           Bit test and set
+#       Z: EAd_orig[xx] == 0
+
+# BSET  #xx,<EAd>          Bit test and set
+#       Z: EAd_orig[xx] == 0
+
+# BNOT  #xx,<EAd>          Bit test and set
+#       Z: EAd_orig[xx] == 0
+
+# BTST  Rs,<EAd>           Bit test and set
+#       Z: EAd[Rs] == 0
+
+# BTST  #xx,<EAd>          Bit test and set
+#       Z: EAd[xx] == 0
+
+# ANDC  #xx,CR             AND control register
+#       If CR refers to SR or CCR, the flags are set to the input value of this instruction. Otherwise:
+#       N: MSG(CR) == 1
+#       Z: CR == 0
+#       V: 0
+# DEAD (removed July 2026): all 6 eab_imm8/eaw_imm16-gated andc forms (CCR/SR/TP/BR/EP/DP) --
+# byte1=0x04/0x0C is exclusively the MAP5 escape, unreachable as a MAP3/4 EA submode.
+# MAP5 escape-gated replacements pending (logic.sinc scope).
+# Generic andc.w/orc.w/xorc.w CR16 fallback constructors removed (BUG 7 fix):
+# same attach operand/constraint clash as stc.w CR16. SR already covered by
+# the explicit "SR" constructors above.
+
+# ORC   #xx,CR             OR control register
+#       If CR refers to SR or CCR, the flags are set to the input value of this instruction. Otherwise:
+#       N: MSG(CR) == 1
+#       Z: CR == 0
+#       V: 0
+# DEAD (removed July 2026): all 6 eab_imm8/eaw_imm16-gated orc forms (CCR/SR/TP/BR/EP/DP) --
+# same MAP5-escape collision as andc above. MAP5 escape-gated replacements pending
+# (logic.sinc scope).
+
+
+# ANDC  #xx,CR             XOR control register
+#       If CR refers to SR or CCR, the flags are set to the input value of this instruction. Otherwise:
+#       N: MSG(CR) == 1
+#       Z: CR == 0
+#       V: 0
+# DEAD (removed July 2026): all 6 eab_imm8/eaw_imm16-gated xorc forms (CCR/SR/TP/BR/EP/DP) --
+# same MAP5-escape collision as andc/orc above. MAP5 escape-gated replacements pending
+# (logic.sinc scope).
+
+
+# LDC   <EAs>,CR           Load to control register
+#       If CR refers to SR or CCR, the flags are set to the input value of this instruction.
+#       No flags otherwise.
+# DEAD (removed July 2026): eab_imm8-gated ldc.b CCR form -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 escape-gated replacement pending (mem.sinc scope).
+# DEAD (removed July 2026): eab_imm8-gated ldc.b TP form -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 escape-gated replacement pending (mem.sinc scope).
+# DEAD (removed July 2026): eaw_imm16-gated ldc.w SR form -- byte1=0x0C is the MAP5
+# escape, unreachable. MAP5 escape-gated replacement pending (mem.sinc scope).
+# ldc.b EA,BR/EP/DP
+# DEAD (removed July 2026): eab_imm8-gated ldc.b BR form -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 escape-gated replacement pending (mem.sinc scope).
+# DEAD (removed July 2026): eab_imm8-gated ldc.b EP form -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 escape-gated replacement pending (mem.sinc scope).
+# DEAD (removed July 2026): eab_imm8-gated ldc.b DP form -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 escape-gated replacement pending (mem.sinc scope).
+# BUG 7 fix: bare CR16 ldc.w fallback constructors removed.
+# CR16 attach table is [ SR _ _ _ _ _ _ _ ] — only index 0 (SR) is valid.
+# All ldc.w EA,"SR" forms are already covered by the CR16=0 block above (lines 1141-1149).
+# The bare CR16 forms produced varnode errors whenever CR16 index != 0 was decoded.
+
+# CLR   <EAd>              Clear
+#       N: 0
+#       Z: 1
+#       V: 0
+#       C: 0
+# BUG 5 fix (clr.b, applied per tst.b/tst.w pattern): disp8/disp16/abs8_br/abs16 use inline
+# Rn_banked/mode-gated constructors so opcode_special can sequence before the payload token.
+
+# NEG   <EAd>              Negate
+#       N: result s< 0
+#       Z: result == 0
+#       V: signed overflow. I think this can only occur for 0x80 or 0x8000. e.g., 0x80 = -128. 0 - (-128) = +128, which cannot be represented as a signed 8-bit value and remains as -128.
+#       C: "set to '1' if a borrow occurs; otherwise cleared to '0.'" I don't know how this can happen though. I'mma just use sborrow, maybe that'll compute correctly?
+# BUG 5 fix (neg.b, per tst.b pattern): disp8/disp16/abs8_br/abs16 use inline Rn_banked/mode-gated
+# constructors so opcode_special can sequence before the payload token.
+
+# TST   <EAd>              Test
+#       N: result s< 0
+#       Z: result == 0
+#       V: 0
+#       C: 0
+# BUG 5 fix (proof-of-concept): gated on map3_page (opcode47=10, byte 1) so these only
+# match within the 0xA0-0xAF MAP3 first-byte range, using the byte-2-scoped eab_*2/eaw_*2
+# subtables so mode2/sz2/Rn2 read byte 2 fresh instead of colliding with opcode_special
+# on byte 1. See the "Byte-2-scoped EA subtables (BUG 5 fix v2)" block above for why the
+# byte-1 eab_direct/eaw_direct forms can't be reused here.
+# BUG 5 fix v3 (corrected): the real-ROM layout for tst (confirmed at 0x13578:
+# F1 16 00 8B) is [EA byte: mode/sz/Rn][opcode_special byte][optional trailing
+# disp/addr payload] -- opcode_special sits BETWEEN the EA byte and its payload,
+# not after it. The v2 attempt (map3_page + eab_*2 subtables) was wrong on two
+# counts: (1) for the no-payload forms (direct/indirect/predec/postinc),
+# map3_page's opcode47=10 and eab_direct's mode=10 test the SAME bits of the
+# SAME byte 1, so chaining map3_page in front just shifts everything one byte
+# too far and can never match a 2-byte instruction; (2) for the forms with a
+# trailing payload (disp8/disp16/abs8_br/abs16), the existing eab_disp8/
+# eab_disp16/eab_abs8_br/eab_abs16 subtables fold the payload token in
+# immediately after the EA byte, leaving no room for opcode_special to land
+# in between -- so those forms are written out inline here instead of via a
+# subtable, with opcode_special explicitly sequenced before the payload token.
+
+# CMP:G <EAs>,Rd           Compare, general format
+#       N: result s< 0
+#       Z: result == 0
+#       V: signed overflow: signed computed result is not the same as the mathematical result assuming signed inputs
+#       C: unsigned borrow: result u> Rd_original
+# DEAD (removed July 2026): eab_imm8-gated cmp:"g.b" -- byte1=0x04 is the MAP5
+# escape, unreachable as a MAP3/4 EA submode. MAP5 replacement pending (arith.sinc scope).
+# DEAD (removed July 2026): eaw_imm16-gated cmp:"g.b" (word) -- byte1=0x0C is
+# the MAP5 escape, unreachable. MAP5 replacement pending (arith.sinc scope).
+
+# CMP:G #xx,<EAd>          Compare, general format
+#       N: result s< 0
+#       Z: result == 0
+#       V: signed overflow: signed computed result is not the same as the mathematical result assuming signed inputs
+#       C: unsigned borrow: result u> Rd_original
+# DEAD (removed July 2026): mis-shapen cmp:"g.b" MAP5 attempt -- gated on
+# eab_imm8 (byte1=0x04, collides with the MAP5 escape) with opcode_special
+# treated as a middle byte, which doesn't match the real 3-byte shape
+# (escape, then immediate, then dispatch byte). Needs rewriting as
+# opcode_special=4; i8; ... with no eab_imm8 gate. Pending (arith.sinc scope).
+# The eaw_* (word-EA) variants below were previously missing for opcode_special=4 (byte immediate).
+# This is the fix for the "Bad Instruction ... DCh" decode failure: byte1=0xDC selects eaw_indirect
+# (mode=13 & sz=1, i.e. word-sized register-indirect @R4), byte2=0x04 selects opcode_special=4
+# (byte immediate per ana.cpp's H8500_cmp_g case, which keys byte-vs-word purely off byte2's value,
+# independent of the EA's own width) -- giving cmp:g.b #imm8,@R4 (3 bytes: DC 04 <imm8>).
+# Zero-extension matches the existing eaw_abs16 case above for consistency; unconfirmed on hardware.
+# The eab_* (byte-EA) variants below were previously missing for opcode_special=5 (word immediate),
+# the symmetric counterpart of the fix above.
+# DEAD (removed July 2026): mis-shapen cmp:"g.b" (word) MAP5 attempt -- gated on
+# eaw_imm16 (byte1=0x0C, collides with the MAP5 escape), same three-token
+# shape bug as the byte form above. Needs rewriting as opcode_special=5;
+# i16; ... with no eaw_imm16 gate. Pending (arith.sinc scope).
+
+# CMP:E #xx:8,Rd           Compare:E, short format
+#       N: result s< 0
+#       Z: result == 0
+#       V: signed overflow: signed computed result is not the same as the mathematical result assuming signed inputs
+#       C: unsigned borrow: result u> Rd_original
+
+# CMP:I #xx:8,Rd           Compare:I, short format
+#       N: result s< 0
+#       Z: result == 0
+#       V: signed overflow: signed computed result is not the same as the mathematical result assuming signed inputs
+#       C: unsigned borrow: result u> Rd_original
+
+# EXTU  Rd                 Extend as unsigned
+#       N: 0
+#       Z: result == 0
+#       V: 0
+#       C: 0
+
+# EXTS  Rd                 Extend as signed
+#       N: result s< 0
+#       Z: result == 0
+#       V: 0
+#       C: 0
+
+# SHAL  <EAd>              Shift arithmetic left
+#       N = res < 0
+#       Z = res == 0
+#       V = MSB(res) != MSB(orig)
+#       C = MSB(orig)
+
+# SHLL  <EAd>              Shift logical left
+#       N = res < 0
+#       Z = res == 0
+#       V = 0
+#       C = MSB(orig)
+
+# SHAR  <EAd>              Shift arithmetic right
+#       N = res < 0
+#       Z = res == 0
+#       V = 0
+#       C = orig[0]
+
+# SHLR  <EAd>              Shift logical right
+#       N = res < 0
+#       Z = res == 0
+#       V = 0
+#       C = orig[0]
+
+# ROTL  <EAd>              Rotate left
+#       N = res < 0
+#       Z = res == 0
+#       V = 0
+#       C = MSB(orig)
+
+# ROTR  <EAd>              Rotate right
+#       N = res < 0
+#       Z = res == 0
+#       V = 0
+#       C = orig[0]
+
+# ROTXL <EAd>              Rotate with extend carry left
+#       N = res < 0
+#       Z = res == 0
+#       V = 0
+#       C = MSB(orig)
+
+# ROTXR <EAd>              Rotate with extend carry right
+#       N = res < 0
+#       Z = res == 0
+#       V = 0
+#       C = orig[0]
+
+# AND   <EAs>,Rd           AND logical
+#       N = MSB(res)
+#       Z = res == 0
+#       V = 0
+#       C = unchanged
+# DEAD (removed July 2026): eab_imm8-gated and.b -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 replacement pending (logic.sinc scope).
+# DEAD (removed July 2026): eaw_imm16-gated and.w -- byte1=0x0C is the MAP5
+# escape, unreachable. MAP5 replacement pending (logic.sinc scope).
+
+# OR    <EAs>,Rd           Or logical
+#       N = MSB(res)
+#       Z = res == 0
+#       V = 0
+#       C = unchanged
+# DEAD (removed July 2026): eab_imm8-gated or.b -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 replacement pending (logic.sinc scope).
+# DEAD (removed July 2026): eaw_imm16-gated or.w -- byte1=0x0C is the MAP5
+# escape, unreachable. MAP5 replacement pending (logic.sinc scope).
+
+# NOT   <EAs>,Rd           Logical complement
+#       N = MSB(res)
+#       Z = res == 0
+#       V = 0
+#       C = unchanged
+# DEAD (removed July 2026): eab_imm8-gated not.b -- byte1=0x04 is the MAP5
+# escape, unreachable as a MAP3/4 EA submode. Not part of MAP5's A5tail set
+# (per ground-truth table); likely simply invalid on real hardware for this
+# EA, not something needing a MAP5 replacement -- confirm against ana.cpp
+# before assuming otherwise.
+# Payload forms (disp8/disp16/abs8_br/abs16): EA logic written inline so opcode_special
+# lands between the EA byte and the disp/addr token, instead of using the
+# eab_disp8/eab_disp16/eab_abs8_br/eab_abs16 subtables (which fold the payload in too early).
+# DEAD (removed July 2026): eaw_imm16-gated not.w -- byte1=0x0C is the MAP5
+# escape, unreachable. Same caveat as not.b above: confirm against ana.cpp
+# whether this EA is simply invalid for not, rather than assuming a MAP5 slot.
+# Payload forms (disp8/disp16/abs8_br/abs16), word size, mirroring the not.b fix above.
+
+# XOR   <EAs>,Rd           XOR logical
+#       N = MSB(res)
+#       Z = res == 0
+#       V = 0
+#       C = unchanged
+# DEAD (removed July 2026): eab_imm8-gated xor.b -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 replacement pending (logic.sinc scope).
+# DEAD (removed July 2026): eaw_imm16-gated xor.w -- byte1=0x0C is the MAP5
+# escape, unreachable. MAP5 replacement pending (logic.sinc scope).
+
+# MULXU <EAs>,Rd           Multiply extend as unsigned
+#       N = res s< 0
+#       Z = res == 0
+#       V = 0
+#       C = 0
+# DEAD (removed July 2026): eab_imm8-gated mulxu.b -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope, per A5tail's
+# mulxu row).
+# DEAD (removed July 2026): eaw_imm16-gated mulxu.w -- byte1=0x0C is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope).
+
+# DIVXU <EAs>,Rd           Divide extend as unsigned
+#       N = res s< 0
+#       Z = res == 0
+#       V = 0
+#       C = 0
+#                                                                                          Rn+1                divisor                                                dividend                        check for DIV0    divide                  Check for overflow         modulo                   Store result
+# DEAD (removed July 2026): eab_imm8-gated divxu.b -- byte1=0x04 is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope, per A5tail's
+# divxu row).
+# DEAD (removed July 2026): eaw_imm16-gated divxu.w -- byte1=0x0C is the MAP5
+# escape, unreachable. MAP5 replacement pending (arith.sinc scope).
+
+# JMP   <EA>               Jump
+#       no flags
+#       Per H8/500 Programming Manual 2.2.19: "Effective address -> PC". Same-page
+#       jump only (cannot cross a page boundary), so CP is left unchanged here.
+
+#absaddr24: "@"^addr24^":24" is addr24 { export *[const]:3 addr24; }
+absaddr24: "@"^addr24^":24" is addr24 { export *[const]:4 addr24; }
+
+# PJMP  @aa:24             Page jump
+#       no flags
+# NOTE: absaddr24 exports *[const]:4 addr24, which is a DEREFERENCED LOAD from
+# that constant address, not the bare address itself. Used directly as
+# `goto absaddr24;` (no brackets), this made Ghidra treat the destination as an
+# indirect jump through a pointer stored AT addr24, rather than a jump TO
+# addr24 - producing "could not flow into non-existent memory" and showing the
+# target as DAT_0000xxxx (a data reference) instead of a clean code label, with
+# the disassembly's trailing "= 04h"/"= ??" being the (irrelevant) dereferenced
+# byte value. Fixed by using the raw addr24 token value directly (not
+# absaddr24's broken export) zero-extended into a local addr:4, then
+# `goto [addr];` - matching every other jmp/jsr constructor in this file (see
+# :jmp and :jsr above, which all compute into a local `addr` from a raw address
+# token and use `goto [addr]` / `call [addr]`, never a *[const] dereference).
+
+# JSR   <EA>               Jump to subroutine
+#       no flags
+
+# PJSR  <EA>               Page jump to subroutine
+#       no flags
+# NOTE: absaddr24 exports *[const]:4 addr24 - a DEREFERENCED LOAD from that
+# constant address, not the bare address. `call absaddr24;` (no brackets) made
+# Ghidra treat the call target as a pointer stored AT addr24, not addr24
+# itself - this is the same bug fixed in :pjmp above, and explains both the
+# DAT_0000fe7e reference and "= ??" seen on pjsr in earlier disassembly dumps,
+# and the abandoned `#addr:4 = absaddr24;` attempt commented out below (that
+# would have copied the dereferenced value, not the address - same flaw).
+# Fixed identically to :pjmp: raw addr24 token, zero-extended into a local
+# addr:4, then `call [addr];`.
+#:pjsr      "@"^Rs        is opcode_special=0x11; Rs & opcode=0x18
+#{
+#	rsNext:1 = &Rs + 2;
+#    pcNext:4 = inst_next;
+#	    SP24 = SP24 - 2;
+#	*:2 SP24 = pcNext[0,16];
+#	    SP24 = SP24 - 2;
+#	*:2 SP24 = zext(pcNext[16,8]);
+#	  addr:4 = (zext(Rs[0,8]) << 16) | zext(*[register]:2 rsNext);
+#	    call   [addr];
+#}
+
+# BSR   disp
+#       no flags
+
+# LINK  FP,#xx             Link stack
+#       no flags
+
+# MOV:E #xx:8,Rd           Move data:E, short format
+#       N: res s< 0
+#       Z: res == 0
+#       V: 0
+#       C: unchanged
+
+# MOV:I #xx:8,Rd           Move data:I, short format
+#       N: res s< 0
+#       Z: res == 0
+#       V: 0
+#       C: unchanged
+
+# RTS                      Return from subroutine
+#       no flags
+
+# PRTS                     Page return from subroutine
+#       no flags
+#       Per H8/500 Programming Manual 2.2.36: @SP+ -> CP, then @SP+ -> PC.
+
+# PRTD  #xx                Page return and deallocate
+#       no flags
+
+# RTE
+#       flags are restored from the stack
+
+# UNLK                     Unlink stack
+#       no flags
+
+r6b_disp8: "@("^disp8^":8","FP"^")" is disp8 {
+	local ptr24:4 = spSegment(TP, FP + disp8);
+	export *:1 ptr24;
+}
+r6w_disp8: "@("^disp8^":8","FP"^")" is disp8 {
+	local ptr24:4 = spSegment(TP, FP + disp8);
+	export *:2 ptr24;
+}
+
+# MOV:L #xx:8,Rd           Move data:S, short format
+#       N: res s< 0
+#       Z: res == 0
+#       V: 0
+#       C: unchanged
+# MOV:S #xx:8,Rd           Move data:S, short format
+#       N: res s< 0
+#       Z: res == 0
+#       V: 0
+#       C: unchanged
+# MOV:F #xx:8,Rd           Move data:F, short format
+#       N: res s< 0
+#       Z: res == 0
+#       V: 0
+#       C: unchanged
+
+# Bcc   disp               Branch conditionally
+#       no flags
+# NOTE: bra (cc=0, "Branch Always") is split out from the generic cc-table path
+# below. Per IDA SDK ins.cpp, bra is CF_USE1|CF_STOP (true unconditional jump,
+# no fallthrough), while every other condition (including brn, "Branch Never")
+# is CF_USE1 only (fallthrough preserved). The generic `cc` table exports a
+# constant 1:1 for cond=0, which previously produced `if (1) goto reloffs8;` -
+# still a conditional-goto pcode shape that keeps a fallthrough edge at
+# disassembly-flow time, even though it always takes the branch.
+# `cc` is a subtable (built from the `cond` token field), so it cannot be
+# constrained directly with `cc=0` syntax - SLEIGH rejected that with
+# "Constraining currently undefined operand: cc". Constrain on the underlying
+# `cond` field instead; SLEIGH prefers the more specific `cond=0` pattern over
+# the general `cc` match, so this only affects bra.
+# `cc` must still be matched in the pattern (not just `cond`) so the `:b^cc`
+# print piece has an operand to interpolate - omitting it produced
+# "operand cc is undefined" from sleigh. Matching `cc` alongside `cond=0` is
+# fine: since `cc` is built from `cond`, constraining `cond=0` forces `cc` to
+# resolve deterministically to the "ra" production anyway.
+# NOTE: the 16-bit-displacement form below is NOT split out the same way.
+# opcode47=3 & cond=0 is byte-identical to opcode_special=0x30, which collides
+# with the existing `:rtd s8 is opcode_special=0x30` constructor further down
+# this file ("Constructors with identical patterns" from sleigh). This is a
+# pre-existing ISA-level ambiguity between bra's 16-bit-offset encoding and
+# rtd's 8-bit-displacement encoding sharing the same opcode byte - not
+# something this fix can resolve without deeper investigation into how real
+# hardware/IDA disambiguates the two (likely on a later byte, not this one).
+# Left as a known limitation: the 16-bit bra encoding still keeps a spurious
+# fallthrough edge. Flagging in HANDOFF.md rather than guessing at a fix here.
+
+# SCB/cc Rn,disp           Subtract, compare and branch conditionally
+#        no flags
+
+# TRAPA  #xx               Trap always
+#        no flags
+
+
+# TRAP/VS                Trap if V (overflow) bit is set
+#                        Vector at H'0010-H'0013 (maximum mode)
+#                        Opcode: 0x09
+
+# SLEEP                  Transition to power-down mode
+#                        Opcode: 0x1A  (was wrongly 0x2C; 0x2C is bra)
+
+# RTD   #xx:8            Return and deallocate (same page, 8-bit immediate)
+#                        @SP+ -> PC;  SP + sext(#xx) -> SP
+#                        Opcode: 0x14 data  (was wrongly 0x30, then wrongly 0x04 --
+#                        confirmed against ana.cpp's A2[0x14]=H8500_rtd. 0x04/0x0C
+#                        are MAP5's entry bytes (A2[4]/A2[12]), not rtd's; this gate
+#                        was silently squatting on MAP5's bytes, which is part of why
+#                        MAP5 could never be wired up without a collision here.)
+
+# RTD   #xx:16           Return and deallocate (same page, 16-bit immediate)
+#                        Opcode: 0x1C data(H) data(L)  (was wrongly 0x34, then wrongly
+#                        0x0C -- confirmed against ana.cpp's A2[0x1C]=H8500_rtd. 0x0C
+#                        is MAP5's word-form entry byte (A2[12]), not rtd's; see the
+#                        byte-form fix above for the same collision.)
+
+# TAS   <EAd>            Test and Set — tests byte operand vs 0, sets bit 7 to 1
+#                        N: result s< 0   Z: result == 0   V: 0   C: 0
+#                        Opcode: 0x39 EA
+
+define token ldc_hint(32)
+    ldc_prefix = (24, 31)
+    ldc_cmd    = (16, 23)
+    ldc_imm16  = (0, 15)
+;
+
+# LDC.W #ldc_imm16, SR
+
+# ---- Functional-area instruction includes (cutover, see README step 7) ----
+@include "h8539f-mem.sinc"
+@include "h8539f-arith.sinc"
+@include "h8539f-logic.sinc"
+@include "h8539f-bit.sinc"
+@include "h8539f-branch.sinc"

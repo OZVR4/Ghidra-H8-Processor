@@ -1,3 +1,100 @@
+Review document index
+====================================================================
+This project's review notes span multiple files. This section is the
+table of contents -- what each file covers and whether it's still open.
+Update this list whenever a new reviewN.md is started or an existing one
+is closed out.
+
+- review.md (this file) -- h8539f Sleigh implementation vs ana.cpp.
+  OPEN. Items 1, 3, 6, 7, 8, 10, 11 still live here directly; items 4, 9,
+  12, 14, 15, 18 are superseded and pointered to the files below; item 13
+  is REOPENED (2026-08-17, 7 DAT_ globals remain unrenamed -- the
+  2026-08-16 "CLOSED, zero hits" claim was inaccurate).
+
+- review2.md -- RVR XML axis/table address verification (Batch 1/2 +
+  appendix items 19-31). OPEN. ~31 items; still-open threads include
+  item 30's dispatch-block isolation and ~50+ untyped functions in the
+  table_lookup_interp/axis_lookup_interp caller family not yet audited.
+
+- review3.md -- cspec-driven far-pointer call-argument fusion (a real
+  Ghidra decompiler C++ patch, the #817-class bug). No longer plan-only:
+  implemented and submitted as PR #9522 (issue #9450), an opt-in
+  <farpointerjoin hislot joinsize> cspec element + ActionFarPointerJoin.
+  Needs a core built with it; the clean master core cannot use it. No in-tree
+  datatest yet (the PR offers one). The smoke-test noted in this file may be
+  out of date. See todo.md item 11.
+
+- review4.md -- return-type audit: table_lookup_interp/axis_lookup_interp/
+  table_lookup_indexed/table_read_indexed caller family. COMPLETE
+  (2026-08-05).
+
+- review5.md -- axis identity/scaling verification against live ROM
+  callers, picking up from review2.md's address-only pass. OPEN.
+
+- review6.md -- return-type audit part 2, remaining untyped functions
+  outside the 4-lookup-primitive family. CLOSED for its own scope (17
+  zero-caller functions confirmed correctly left untyped, no further
+  action there) -- but review7.md and review8.md both flag follow-up
+  work this file didn't cover.
+
+- review7.md -- call-site CONCAT/extraout artifact audit (functions with
+  correct return types that still show decompiler noise). OPEN --
+  checklist assembled, no functions individually verified yet.
+
+- review8.md -- computed-call state-table dispatch: f502_state_table_
+  dispatch and its unresolved handler targets. OPEN -- several named
+  follow-ups outstanding (review6.md correction, f502_state_index_update,
+  13 of 17 zero-caller functions still unaddressed, a candidate DAT_
+  bitfield).
+
+- review9.md -- sci1_colon_frame_dispatch jump table: emulation
+  feasibility, the spSegment fix, and why DP still blocks recovery.
+  OPEN -- consumer of a fully-decoded flash sector table still unfound;
+  two named functions not yet checked.
+
+- review10.md -- axis-pairing verification: the table+2 RAM-pointer
+  family and Convention B. OPEN -- named next steps outstanding
+  (manual review of 5 flagged tables, optional mode-value sanity check).
+
+- mut_verification_status.md -- full detail backing review.md's item 1
+  (MUT actuator-test mapping) and related SCI1/TCU findings. OPEN,
+  referenced throughout review.md item 1.
+
+- test/functions_evo5.md, test/functions_w4a51.md -- cross-binary
+  function-matching checklists (successor to review.md's old item 12).
+  OPEN.
+
+- review11.md -- h8539_import_tables_xml2.py: behavior + implementation plan.
+
+- review12.md -- RVR scaling/axis table verification: header-offset bug + correction batches.
+
+- review13.md -- H8/500 paged/banked addressing issues. (Not the same as item 13 below.)
+
+- review14.md -- TableHeader struct rollout across the RVR table region
+  (0x2d080-0x2d8d6) and xref-based verification of the XML's header
+  claims. OPEN -- 7 verification TODOs live there.
+
+
+- review15.md -- register0x0e investigation. RESOLVED 2026-10: #9540/#9541 print-layer fix
+  (920fcd6) + RdN and displacement-order language fixes; register0x 210 -> 0. See todo.md item 9.
+
+- review16.md -- register0x0e print-layer fix. COMPLETE (landed 2026-08-26).
+
+- review17-19.md -- auStack_/sat_add_u16 chain. HISTORICAL; cause since found (displacement
+  order, RdN pointer store, param_fpN stack offsets). See todo.md.
+
+- review.md item 19 (below) -- DAT_0001f1fe status/DTC-validity flags word
+  mapping. OPEN, started 2026-08-17 as part of the DAT_ global renaming
+  reopen (item 13).
+
+- review20-24.md, review25-26.md (SUPERSEDED), review-9561-merge-ordering.md,
+  review-calling-convention-regression.md -- muldiv_*/#9561 regression chain. Mostly
+  SUPERSEDED by the above; read review-9561-merge-ordering.md before archiving.
+
+ - todo.md, todo-r0-r5-displacement-order.md -- current work list (2026-10-26).
+
+ - CHANGELOG.md, h8539f-instruction-table.md -- reference.
+
 Review: h8539f Sleigh implementation vs ana.cpp (IDA H8/500 module)
 ====================================================================
 
@@ -7,6 +104,9 @@ source/ida-sdk-main/src/module/h8500/ana.cpp.
 
 Completed items (fixed bugs, resolved bookmarks, retracted false leads) have
 been moved to CHANGELOG.md. This file tracks only open/in-progress work.
+Compressed 2026-07-23 to current state only -- superseded theories, reverted
+trial fixes, and session-by-session narration have been dropped in favor of
+final conclusions. Git history has the full story if it's ever needed.
 
 Verified correct
 ----------------
@@ -34,801 +134,530 @@ Verified correct
 Open items
 ----------
 
-2. Address Table bookmark at 0x13898 (5 entries) -- still unresolved
-   No code xref, no clean repeating structure, sits in a messy byte region
-   alongside other coincidental-looking pointer values -- treat with
-   suspicion pending the Step 5d verification tool (item 4 below).
-   The other 6 Address Table bookmarks originally listed here (0x10140,
-   0x2d8ec, 0x2d9ac, 0x2d9ec, 0x2da6c, 0x2db2c) are resolved: none were
-   jump/dispatch tables. 0x2d8ec is a genuine ISCV/idle-RPM dispatch
-   structure; 0x2d9ac/0x2d9ec/0x2da6c/0x2db2c are a real calibration-table
-   catalog (headers + findings documented via Ghidra bookmarks, category
-   "H8539F-Analysis", at each address); 0x10140 is confirmed not a jump
-   table but its exact purpose is unresolved/low-confidence. See those
-   in-place bookmarks for detail rather than duplicating it here.
-   Follow-up for item 4: Step 5d's verify_xml_table() design should be able
-   to use the same 0x03/0x02 header-signature check plus this table-of-
-   tables catalog pattern as an additional independent corroborating
-   signal, not just the XML-vs-scraper comparison originally scoped.
+1. MUT Mode5 actuator-test RequestID mapping + physical output pin ID --
+   IN PROGRESS, full detail in mut_verification_status.md.
+   Confirmed: output_relay_flags_f0e6 (RAM 0xf0e6) is a real 8-bit
+   relay/output flag word mirrored to ports by mirror_status_f0e6_to_ports
+   (0x156ce).
 
-3. XML table verification design -- Step 5d, not yet implemented
-   Community EcuFlash XML table definitions cannot be trusted blindly, and
-   neither can the ROM byte-pattern scraper on its own -- both are
-   independent, individually fallible signals (the scraper's "adjacent word
-   delta" sanity gate is heuristic, not proof, same failure mode as
-   Ghidra's built-in Address Table analyzer producing the 0x13898
-   false-positive vs. the genuine SCALING_TABLE_0002D8D6 cluster at
-   0x2d8ec, see item 3 above).
+   BIT NUMBERING CORRECTED (2026-07-26): the two entries below marked
+   "bit3"/"bit7" in earlier notes were WRONG -- both were pin-name-correct
+   but bit-number-wrong (an old miscount, never independently re-verified
+   until the "~20 untraced writer sites" sweep below closed every remaining
+   xref and forced a re-check of the full bit map against
+   mirror_status_f0e6_to_ports itself). Corrected, full bit map:
+   bit0 (isc_f0e6_bit0_update, P1DR.4, knock-gated, not SCI1-reachable),
+   bit1 (EGR solenoid, P2DR.7, egr_f0e6_bit1_update -- has two writers, one
+   unconditional at cold-init (engine_state_f498_init), the other the real
+   RPM/warmup-gated ongoing control (egr_f0e6_bit1_update); the "interaction"
+   is just normal init-then-steady-state override, not actually mysterious),
+   bit2 (canister purge, P4DR.7, purge_f0e6_bit2_update -- CONFIRMED
+   forceable via SCI1 cmd 0xD1, the strongest real actuator-test candidate
+   found on this ROM. NOTE 2026-07-26: there is a SEPARATE, still-
+   unresolved DUTY-CYCLE purge path too -- canister_purge_duty_calc_f4ac
+   (F4AC) -- gated in part by a live TCU serial link (see item 6's TCU
+   sub-note below). Not confirmed whether F4AC and this on/off F0E6.bit2
+   path drive the same physical solenoid or two different ones), bit3
+   (PCDR.3, INVERTED -- NOT EGR, previously
+   unmentioned. Two writers found: knock_octane_f0e6_bit3_gate_dispatch
+   (RPM/knock-pattern-gated, see below) and warmup_state_f594_f0e6_init
+   (NEW 2026-07-26, unconditional set at warmup-state init, same
+   init-then-steady-state pattern as bit1) -- plausibly a MIL/check-engine
+   or knock-warning lamp), bit4+bit5 (EGR valve position, P4DR.4/PCDR.6,
+   egr_f0e6_valve_bits_update, orchestrated by egr_mode_dispatch/
+   egr_sequence_control), bit6 (PCDR.7, via dispatcher cmd 0xD2), bit7
+   (P1DR.5, ign_advance_f0e6_bit7_update -- previously unmentioned,
+   forceable via SCI1 cmd 0xD8, ignition-adjacent per inherited naming,
+   unconfirmed). Separately,
+   f0e6 bits 8-11 are an unrelated O2 sensor upstream/downstream control
+   mode field (via o2_sensor_control_dispatch). bit13 (P6DR.2): CHECKED
+   2026-07-23 via xref trace (corroborates a prior 2026-07-22 byte-pattern
+   sweep) -- no directly-encoded writer exists anywhere in this ROM
+   (mirror_status_f0e6_to_ports reads/forwards it to P6DR.2 faithfully, but
+   nothing else touches bit 0x2000). Consistent with this ROM's known
+   static-analysis blind spot for bank-prefixed/indirect RAM writes -- not
+   proof no writer exists at all, just that none is reachable via a literal-
+   address instruction. Low priority to pursue further absent a new lead.
+   Separately, SCI1 cmd 0xCC (CORRECTED 2026-07-26 -- was misattributed to
+   0xCD in earlier notes; re-verified via direct read_memory at the table
+   entry, 0x13770 = 00 FF 20 00) sets f510 bit13 (a different bit13,
+   different RAM word, read by o2_upstream_enable_check) -- a fourth SCI1-
+   reachable actuator chain, but it doesn't terminate in a physical pin the
+   way the other three do. This correction was part of a larger fix: the
+   whole cmd_c0_d8_actuator_bit_table CC-D8 region was off-by-one in all
+   prior notes (full corrected table and the real f00e/f25a gate mechanism
+   now in the sci1_meta_cmd_dispatch_c0_ff plate comment and
+   mut_verification_status.md) -- this also retroactively resolved two
+   previously-flagged "table anomalies" (the D3 dual-bit entry and the D8
+   pattern-break), which turn out to be the same single fact seen from two
+   wrong offsets: the real dual-bit entry is D2, not D3, and D8 correctly
+   continues an uninterrupted 13-entry bit sweep from CC down to D8 with no
+   break at all.
 
-   Design: a new Step 5d ("XML Cross-Verification"), inserted between
-   Step 5c (XML labeling) and Step 6 (auto-analysis) in
-   h8539_ecu_master_setup_new.py. For each XML <table> entry: recompute
-   the expected header address, run Step 8's exact byte-signature checks
-   against it, cross-check the XML's declared axis RAM pointer against the
-   RAM pointer actually encoded in the header bytes, run a length-bounded
-   data-body sanity check using the XML's own elements x cell-size (rather
-   than Step 8's open-ended scan), and check for an actual Ghidra code
-   xref to the header as a third, independent corroborating signal.
-   Classify each table VERIFIED / SUSPECT / REJECTED -- agreement between
-   XML and scraper is corroboration, not automatic truth; disagreement
-   is logged for manual review, not silently resolved either way. Only
-   VERIFIED tables get their header + full data body typed as data and
-   protected from Step 6 auto-analysis. SUSPECT tables get labeled but
-   left unprotected and flagged in a report; REJECTED tables get no label,
-   logged with reason + raw header bytes for manual adjudication.
+   FIFTH chain found 2026-07-26, and the strongest one yet: cmd 0xCD (f510
+   bit12) or 0xCE (f510 bit11) -> check_mode_gate_f510 (0x18ae5) -> forces
+   egr_position_target_f494_calc's output (f494) to a fixed ROM calibration
+   value -> scaled and written to T6GR1 (ROM 0xff88-89), a REAL, confirmed
+   H8 Timer 6 PWM duty/compare register (not an inferred port pin). This is
+   the ACTIVE EGR control mechanism on this ROM -- confirmed by reading ROM
+   config byte 0x102e4 directly, value is 2, selecting this PWM variant
+   over the relay-style two-bit sequence (which is present in the ROM but
+   dead code here). Timer 6 is corroborated as a genuinely configured PWM
+   channel by its cold-boot init function (period + duty register pair
+   both set with matching scale). Strongest physical-actuator evidence
+   found in this whole investigation, though the exact vehicle-side wiring
+   of Timer 6's output pin is still unconfirmed. Full detail in
+   mut_verification_status.md "FIFTH SCI1 ACTUATOR-FORCE CHAIN".
 
-   Full design writeup: review.md companion doc drafted this session
-   (see /mnt/user-data/outputs/review.md from the same conversation) --
-   covers the classification table, 1D-scalar special case (no header
-   signature exists to check, defaults to SUSPECT unless corroborated),
-   and open questions (axis-pointer tolerance, whether REJECTED tables
-   still get a comment-only plate, manual-override list for promoting a
-   SUSPECT to VERIFIED without re-running the full check). Not yet
-   implemented in the script -- `verify_xml_table()` function and Step 5d
-   wiring are the next concrete step.
+   Separately found 2026-07-26 (not SCI1-related, but same actuator-tracing
+   thread, triggered by a question about RAM cell F4CA): a checksummed TCU
+   (transmission control unit) serial RX frame inside tcu_rx_main_scheduler
+   (0x2aa36) -- F4C4/F4C6/F4C8/F4CA + checksum F4CC, latched into confirmed
+   copies F4BC/F4BE/F4C0/F4C2 on a checksum match. Confirmed genuinely
+   serial (F4C2 is also written directly by serial_fec5_byte_to_fifo,
+   inside the known SCI1/2/3 UART register range). F4BC/F4BE feed directly
+   into canister_purge_duty_calc_f4ac (item 1's bit2 purge note above) --
+   i.e. canister purge duty is influenced by live TCU-link data, not just
+   engine-side state. All cells renamed in Ghidra (tcu_rx_frame_raw_byte0-
+   3_*, tcu_rx_frame_checksum_f4cc, tcu_rx_confirmed_byte0-3_*, tcu_rx_
+   frame_state/timeout_counter_*); f226_bit7_update_from_f4c2_check
+   renamed to tcu_link_confirmed_flag_f226_bit7_update. Full detail in
+   mut_verification_status.md "TCU SERIAL RX FRAME FOUND".
 
-3. 0x20640/0x20843 reachability -- low priority, does not block anything
-5. logging.txt (test/rvr/) - MUT verification log - RE-VERIFICATION IN PROGRESS,
-   CONFIRMED + REFUTED(partial) sections now done
-   Separate from the old imported-XML plate comments (previously tracked as a separate
-   item here, dropped since there's no ROM available to re-verify them against --
-   left to the community to re-check on publish): a hand-curated, already-deduplicated summary
-   (805 lines) of MUT RequestID address/semantic verification, produced session 10
-   (2026-07-03) under the OLD/buggy Sleigh grammar - i.e. before the MAP3-6 dispatch
-   fixes that later changed how surrounding bytes decode. Since the decoder has
-   materially changed since this file was written (691 functions now analyzed with
-   zero outstanding decode bugs), its claims cannot be trusted at face value and are
-   being re-verified live against current disassembly + xrefs, not just imported.
-   Approach taken (2026-07-12 session): rather than a blanket caveat-tag import into a
-   new file, each CONFIRMED-section claim is being re-derived from live disassembly
-   and RequestID-table
-   cross-checks, then recorded as a dated plate comment directly on the relevant
-   Ghidra function(s), so the finding lives next to the code it describes.
-     - CONFIRMED MUT ITEMS: ALL ~15 RequestIDs RE-VERIFIED this session (2026-07-12)
-       against live disassembly + the MUT RequestID table @ROM 0x2fad0 (150 entries,
-       indexed via adc_sensor_convert_single @0x171c3). All hold up under the current
-       decoder: TPS, Battery, AirTemp, MAP/Boost, O2 Sensor, O2 Sensor 2, Octane Level
-       (full chain), TargetIdleRPM, AirVol, InjPulseWidth, ISCSteps, WGDC (full chain),
-       TCU Shift Torque Cmd, and the full Knock cluster (Sum/ADC/Var/Base/Change/
-       Dynamics) - 14 of 15 confirmed. EXCEPTION: Knock Voltage (0x30 -> 0xF15C/F15D) -
-       read location confirmed inside tcu_shift_torque_and_knock_mgmt, but NO WRITER
-       found under any bank prefix (0x0-0x3) checked. logging.txt's claim that this is
-       "written by knock/TCU handler" is NOT CONFIRMED on the write side - flagged
-       in-place in Ghidra, needs further investigation (possibly a bank prefix >3, a
-       computed/indirect write, or the value may not be runtime-written at all).
-       Coolant Temp (0xF109/F10F) also re-checked: no writer found under bank prefixes
-       0x0-0x1 either - consistent with logging.txt's own admission this one was never
-       independently traced (still 4-way unreconciled, see OPEN ITEMS below).
-       DECOMPILER OUTPUT: RESOLVED (2026-07-15). The stack-var-as-address
-       artifact issue previously affecting decompile_function output on
-       MUT-adjacent functions (adc_read_sequence_b, o2_closed_loop_fuel_trim_compute,
-       and others) is fixed by the user's core changes. Raw disassembly remains
-       the reference when in doubt, but decompiler output is no longer flagged
-       as unreliable for this codebase.
-     - REFUTED / MISLABELED: address arithmetic correct but semantic label wrong.
-       BOTH items RE-VERIFIED this session (2026-07-12):
-       - knock_flag (EFC2/EFC3): CONFIRMED mislabel. Both writers
-         (efc2_threshold_update @0x252f9, and a second writer inside
-         tcu_rx_main_scheduler @0x2b676) are throttle-position-delta detectors
-         (TPS-now vs TPS-previous, @0xF13C/0xF142) - genuinely nothing to do with
-         knock. Matches logging.txt exactly.
-       - F17A/F17B "RPM": CONFIRMED refuted. engine_torque_pct_scale_calc (@0x2184b,
-         write to F17A at ROM 0x218b8 - exact address match to logging.txt's citation)
-         reads only 0xF5CA/F5CC (confirmed torque values) via div_s32_s16_rounded-style
-         calls, zero RPM input anywhere in the function. Matches logging.txt exactly.
-       - EFEA: RE-VERIFIED 2026-07-14. CONFIRMED refuted. Traced the F13C/F140/DE8
-         gating block in tcu_rx_main_scheduler (~0x2b0af-0x2b118): EFEA is either
-         cleared to 0 or set to a fixed ROM constant (@0xDE8), gated by comparisons
-         of F13C (current cycle) against F140 (previous cycle) and several
-         threshold constants (DDE/DE0/DE2/DE6). Only ever read as a boolean
-         (tst.w @0xEFEA, != 0) - never as a magnitude. Same throttle/load-transient
-         hold-flag family as the already-confirmed EFC2 mislabel, not RPM. Plate
-         comment added to tcu_rx_main_scheduler (0x2aa36) documenting this.
-       - F0C0: RESOLVED 2026-07-14 via review.md item 3's table-of-tables
-         investigation. The 150+ raw byte-pattern hits landing in
-         calibration/scaling-table regions (0x11xxx-0x13xxx, 0x2dxxx) are
-         axis-pointer occurrences inside real 2D/3D calibration table
-         headers (0xF0C0 is the standard axis register for this table
-         family) -- not code, and not a MUT_83/MUT_E1-style collapse.
-         logging.txt's original "one odd COMPUTED_CALL xref" claim remains
-         unverified (no address given), but the broader "unsupported, no
-         support either way" framing is superseded: F0C0 does have a clear,
-         confirmed role, just not as a MUT RequestID-readable sensor value.
-     - CURRENTLY OPEN ITEMS (8 items): most significant is RPM's real location is
-       UNKNOWN -- all three prior candidates refuted/unsupported, with a concrete
-       proposed next step (re-check callers of div_u16_sat/div_u32_u16_sat/
-       div_u32_u16_rounded now that more functions are named). Also: Load1B producer
-       not found (only reset paths located), WGDC vs WGDCCorr relationship untraced,
-       a four-way coolant-temp address conflict with none reconciled, two undecoded
-       gear-config table addresses, ~140 remaining "Bad Instruction" bookmarks
-       clustered at 0x10000-0x10090/0x14000-0x14e10.
-     - RETRACTED DEAD ENDS: explicitly do-not-re-investigate list, including a claim
-       that "0x3898[chan] dispatch table" was decoded as a generic ADC/DMA transfer
-       descriptor state machine (init/start/poll/ready/done), NOT RPM-specific.
-       CHECKED THIS SESSION against the live program: no function and no xrefs
-       currently exist at 0x13898 (the address this file's item 3 flags as an
-       unresolved/suspect address table) -- it is NOT CONFIRMED that logging.txt's
-       "0x3898" is the same address as this file's 0x13898; could be shorthand for a
-       different address, a typo, or a stale reference from before a boundary/label
-       change. Do not treat item 3's 0x13898 as resolved by this logging.txt entry
-       without independently re-deriving the dispatch-table structure against the
-       current live listing.
-   Also contains a documented independent verification pass (table-overlap collision
-   check: 3408 -> 913 after removing a ~60-table speculative block from the MT XML)
-   which is a real piece of cross-checking work, not just assertion -- but was still
-   performed under the old grammar and against XML/table data that may itself need
-   re-verification per items 3/4 above.
-   DONE (2026-07-13 session): non-RPM content extracted into mut_verification_status.md
-   (new tracked file, repo root). Covers CONFIRMED items, the REFUTED knock_flag
-   mislabel, the tcu_shift_torque_and_knock_mgmt structural fix, the tuning-XML
-   speculative-table cleanup, RETRACTED dead ends, and the non-RPM open items
-   (Load1B, WGDC vs WGDCCorr, coolant-temp four-way conflict, gear_config tables,
-   o2_downstream_clamp, AirFlowMUT2Byte, Bad Instruction backlog). RPM identity
-   itself was deliberately left out of that file and stays tracked here / via the
-   isr_sci3_eri lead above.
+3. XML table verification design -- NOT YET IMPLEMENTED. Community EcuFlash
+   XML table defs and the ROM byte-pattern scraper are both individually
+   fallible (same failure mode as the 0x13898 false positive above), so a
+   new Step 5d ("XML Cross-Verification") is designed to sit between XML
+   labeling and auto-analysis in h8539_ecu_master_setup_new.py: for each XML
+   <table>, recompute the expected header address, run the byte-signature
+   check against it, cross-check the XML's declared axis RAM pointer against
+   the one actually in the header, run a length-bounded data-body sanity
+   check using the XML's own element count, and check for a real Ghidra code
+   xref to the header -- plus item 2's table-of-tables catalog pattern as an
+   extra corroborating signal. Classify VERIFIED/SUSPECT/REJECTED (agreement
+   is corroboration, not automatic truth); only VERIFIED tables get typed
+   and protected from auto-analysis. 1D-scalar tables (no header signature
+   to check) default to SUSPECT unless otherwise corroborated. Not yet
+   wired into the script -- `verify_xml_table()` and the Step 5d call site
+   are the next concrete step.
 
-   NEW FINDING (2026-07-13, follow-up session): MUT RequestID table @0x2fad0 is
-   larger than previously assumed and contains a block of placeholder/collapsed
-   entries. The bound constant at ROM 0x13282 (TCU_Gear_Ratio_Periods+2, read by
-   adc_sensor_convert_single @0x171c3) is 0x10F (271), meaning the table actually
-   has 272 entries (544 bytes), not the 150 checked in the original CONFIRMED pass
-   above. Reading the full 544 bytes shows ~55 of those 272 RequestIDs (~20%) do
-   not resolve to distinct RAM cells at all -- they collapse onto just two shared
-   addresses:
-     - 0xF0BB (existing Ghidra label MUT_83) -- target for RequestIDs 0x83,
-       0x94-0x98, 0xA0-0xA1, 0xB3-0xBE (20 IDs)
-     - 0xF0BA (existing Ghidra label MUT_E1) -- target for RequestIDs 0xE0-0xF8,
-       0xF9-0xFB, 0xFE, 0x10A-0x10F (35 IDs)
-   All 272 decoded addresses do fall inside the legal 0xEE80-0xFFFF on-chip
-   RAM/IO block per the pspec (including 12 entries at table indices 164-175 =
-   0xFE82-0xFE97, which are legitimate port data registers, not bugs) -- so this
-   is not an out-of-range-pointer bug, it's a duplication/placeholder-collapse
-   pattern. Most likely interpretation: MUT_83 and MUT_E1 are the one genuine
-   value in each block, and the other ~53 RequestIDs are unimplemented/reserved
-   slots defaulted to a filler address at table-build time -- querying MUT for
-   those IDs would silently return an unrelated cell's byte rather than real data.
-   UPDATE (2026-07-13, same-day follow-up): get_bulk_xrefs showed zero code
-   cross-references to either address, but that's a static-xref blind spot (this
-   ROM's indirect/bank-prefixed RAM access isn't reliably tracked). Resolved
-   by raw byte-pattern search
-   (`F0 BB` / `F0 BA`) across the whole image, filtered to hits landing inside an
-   actual function body (checked via get_function_by_address; several raw hits
-   were false positives sitting inside unrelated data tables, e.g. 0x133a0 and
-   the 0x2d1xx-0x2d7xx idle-RPM scaling-table cluster, and were excluded):
-     - 0xF0BB (MUT_83, 20 IDs): CONFIRMED dead. Every occurrence of the byte
-       pattern in the ROM is inside the MUT table itself (0x2fbd6-0x2fc4e) --
-       no function anywhere reads or writes it. Safe to treat as unimplemented;
-       do not log these 20 RequestIDs.
-     - 0xF0BA (MUT_E1, 35 IDs): CONFIRMED live, but as a *shared scratch cell*,
-       not a dedicated sensor register. It's touched by a dozen-plus unrelated
-       functions: wgdc_correction_integrator_update (0x18fe0),
-       canister_purge_duty_calc_f4ac (0x19560), calc_f110_f10e_via_table
-       (0x21314), knock_octane_dual_axis_table_blend_f2a8 (0x2339d),
-       f0ba_f2b2_threshold_blend_calc (0x238d8 -- already named after this
-       address in an earlier session), isc_f34e_f34a_correction_calc (0x25742),
-       isc_f374_correction_calc (0x25e8b), f4de_f4e2_octane_correction_calc
-       (0x265c9), idle_stepper_table_lookup_wrapper (0x268e2), and
-       isc_f408_correction_calc (0x272c6). One address, many unrelated callers,
-       is the signature of a shared temp/scratch cell reused across WGDC,
-       canister-purge, knock/octane, and ISC correction routines -- whatever
-       byte sits there depends on whichever routine last ran. Worse than dead
-       for logging purposes: it looks like a real reading but is transient
-       noise from an unrelated calculation. Do not log these 35 RequestIDs
-       either. Open item: whether any tooling/spec built on top of the MUT
-       table (e.g. the ecu_master scraper or an EcuFlash-side RequestID list)
-       currently treats these 55 collapsed IDs as valid/distinct and needs a
-       fix or an explicit "unimplemented/unreliable" flag.
-
-   NOTE on a Sleigh decode issue mentioned in logging.txt: that file recorded six
-   byte-identical "Unable to resolve constructor" sites (opcode `A0 16`, misread as
-   `tst.b R0`) as an open bug. Per the user (2026-07-13), that was a bug in the OLD
-   grammar only -- the Sleigh implementation has since been updated and all such
-   decode bugs are confirmed gone in the current live Ghidra project. Recorded in
-   mut_verification_status.md as a resolved historical note, not an open item; no
-   action needed unless a genuinely new "Unable to resolve constructor" bookmark
-   turns up in the live project, which should be treated as a fresh finding rather
-   than a recurrence of this one. DONE (2026-07-14): test/rvr/logging.txt has been
-   deleted by the user, its content having been fully captured above and in
-   mut_verification_status.md.
-
-   Final state (after two rounds of investigation and one retraction): the
-   `switchD_00028b50::caseD_4` label that earlier sessions relied on to
-   claim 0x20843 was a genuine live jump-table entry point is stale/orphaned
-   Ghidra metadata, not a real relationship. The switch at 0x28b2f's real
-   8 case targets (read directly from ROM) all land next to the switch
-   itself; none near 0x20640. Zero xrefs to 0x20640. A binary-wide search
-   for the address's low word inside any of the 7 known jump/address tables
-   found no matches. Current best evidence: 0x20640/0x20843 are not reached
-   by anything presently mapped in this binary -- but the bytes decode as
-   real, deliberate-looking instructions (bpl/nop/ldm.w), not a 0xFF filler
-   pattern, so this isn't simply padding either. Left the placeholder
-   function (sci1_boot_switch_case4_frag_20640) in place. Open item: find
-   what, if anything, actually reaches 0x20640 -- possibilities include a
-   computed/indirect call not caught by current scans, a genuinely
-   dead/legacy code path, or disassembler noise that happens to decode
-   plausibly.
-
-5b. continued from 5
+4. 0x20843 reachability -- superseded. Full investigation (isolation tests,
+   SleighDebugLogger breakthrough, CP-context lead, #817 corroboration) now
+   lives in review9.md.
 
 
-  "new_str": "   crank-period buffer at F9A0-F9A8 (written by the confirmed-real
-   isr_tpu3_tgi3a capture ISR) must be converted to RPM somewhere via a
-   division operation; re-check all callers of div_u16_sat/div_u32_u16_sat/
-   div_u32_u16_rounded a second time now that ~10 more functions have been
-   named and decompiled since that check was last run (session 2), in case
-   one of the newly-resolved functions is the missing link.
+5. RPM identity -- FINAL STATE (2026-07-15). Best candidate: P54/T2IOC1,
+   polled by isr_ipu_ch2ch4_input_capture (0x168e3, renamed from an earlier
+   isr_sci3_eri mislabel -- it touches zero SCI/serial registers). Structural
+   evidence (simple single-edge period-delta, no missing-tooth sync logic,
+   unlike the confirmed crank ISR isr_tpu3_tgi3a which does implement
+   missing-tooth sync) favors this being the 2-tooth camshaft position
+   signal rather than crank-angle, giving 1 pulse per crank revolution (a
+   real if coarse RPM-equivalent). Two independent downstream consumers
+   confirmed, corroborating a genuine engine-speed signal: F5DE -> ... ->
+   engine_torque_pct_scale_calc (0x2184b), and F5D6/F5D8 ->
+   tcu_shift_ratio_buffer_update (0x2c16e, via tcu_periodic_dispatch
+   0x2c12b). This is inference from ISR structure, not a proven pin-level
+   trace -- no connector-pin-to-H8-chip-pin schematic exists for this ECU,
+   so board-level wiring confirmation is closed at this confidence level;
+   do not resume searching for one. Open: absolute RPM scale/units (timer
+   tick rate + the 0x10 divisor's real-world meaning) not yet derived.
 
-   NEW LEAD (2026-07-13 session, reopens this item): `isr_sci3_eri` (0x16956)
-   is mislabeled -- it touches zero SCI/serial registers. It actually reads
-   H8 timer input-capture registers (T2GR1H, T2CNTH, T4GR1H) and port P5DR,
-   and computes a period-delta between successive capture edges into RAM
-   0xF5DE (structurally: simple single period-delta, no missing-tooth sync
-   logic -- contrast with the confirmed crank ISR isr_tpu3_tgi3a on TPU3/T5,
-   which DOES implement gap-ratio missing-tooth sync against F9A0-F9A8; the
-   simplicity here fits a sensor that produces one clean pulse per event,
-   not a multi-tooth wheel). F5DE feeds a shift-register chain (F5DE->F384->
-   F5CA->F5CC->F5CE->F5D0) into `engine_torque_pct_scale_calc` (0x2184b),
-   whose \"torque\" label was itself inherited/asserted without independent
-   trace -- see logging.txt session 5 citation, which only asserts F5CA/F5CC
-   are \"confirmed engine torque values\" parenthetically, no trace shown.
-   User confirmed the RVR's camshaft has 2 teeth: 2 pulses per cam rev,
-   cam turns at half crank speed, so this reduces to exactly 1 pulse per
-   crank revolution -- a genuine (coarse) engine-speed signal, not torque.
-   Consistent with: (a) the ISR's simple period-delta structure (every cam
-   pulse is equally valid, no sync-tooth search needed), (b) no separate
-   cam-sync ISR found elsewhere in the ROM (isr_tpu3_tgi3b, the other TPU3
-   channel, is PWM ch0/1 period tracking, unrelated) -- consistent with a
-   batch/group-fire injection scheme on this ROM not needing one, and (c)
-   downstream consumption by tcu_shift_torque_and_knock_mgmt (TCU shift/
-   torque scheduling), not any injection-timing/cylinder-sync code.
-   NOT YET CONFIRMED: which physical pin P5DR bit 4 (polled in the ISR) is
-   wired to, per the H8/539F pspec port-5 assignment, cross-checked against
-   the RVR wiring diagram -- this is the concrete next step to settle it.
-   If confirmed, F17A/F17B's \"REFUTED, do not resume searching here\" status
-   from the 2026-07-12 session above should be walked back -- this would be
-   a real (if coarse, 1-sample-per-crank-rev) RPM-equivalent signal, and
-   `engine_torque_pct_scale_calc`/isr_sci3_eri should be renamed accordingly
-   once the pin mapping confirms it.
+6. SCI1 command dispatcher (sci1_meta_cmd_dispatch_c0_ff, 0x28869) -- its
+   0xC0-0xD8 actuator bit-table (ROM 0x13740) is decoded. Confirmed:
+     - f516 bits 2/5/6/8 (cmds C3/C4/FA) -> f516_request_latch_f09a_calib_
+       select (0x27e1a), a calibration selector for output f09a.
+     - f516 bit7 (cmd FC) -> eee0_eeee_diag_flags_reset_dispatch (0x282c1)
+       -> startup_phase_reset_eed6_eefa_bulk (0x28413) -- a live, on-demand
+       trigger, not just a startup path. Independently corroborated by the
+       user-supplied XML's own "FC = Clear EFI Diagnostic Codes" label.
+     - f516 bit11 -> f588_duty_gate_f516_bit11_set (0x28b62), inside
+       sci1_periodic_phase_dispatch_f526 (0x28b2f). That parent function has
+       a genuine decompiler jump-table reconstruction failure
+       (halt_baddata()/"Could not recover jumptable" on switch cases
+       0/2/4/6) -- a real open item on its own merits, unrelated to the
+       page-banking work in item 9.
+     - f516 bit1/bit12 writer -- CLOSED (2026-07-26): search_byte_patterns
+       for the literal address bytes across the whole ROM found 27 touches
+       of RAM f516 (vs 10 via plain xref lookup; the rest were individual
+       instructions in already-known multi-branch functions, plus a
+       previously-undefined jump-table case (0x28cc8) now disassembled and
+       confirmed not to touch f516, plus one false positive at 0x232d0 --
+       coincidental bytes inside an unrelated pointer table, ruled out by
+       reading the table directly). None of the 26 genuine hits set bit1 or
+       bit12. Same conclusion as bit13 above: closed as "no writer reachable
+       via literal addressing," not "confirmed no writer exists" -- the
+       ROM's bank-prefixed/indirect blind spot still applies. Full detail
+       and method in mut_verification_status.md.
+   FIXED (2026-07-23): sci1_periodic_phase_dispatch_f526's body was wrongly
+   absorbing 0x2800c-0x28b51 (2.9KB before its own entry at 0x28b2f) due to
+   a stale computed-jump xref from the switch at 0x28b50 -- same root cause
+   as the earlier sci1_boot_switch_case4_frag_20640/0x20640 fix (see git
+   history). Verified via the actual jump-table bytes at 0x28b52 (8 entries,
+   all in 0x28xxx, matching the plate comment) that 0x2800c was never a real
+   target. Deleted and recreated the function at 0x28b2f; body is now
+   correctly 0x28b2f-0x28b51 (79 bytes), matching the 8-entry switch. The
+   freed-up region 0x2800a-0x28081 turned out to contain two real,
+   previously-absorbed functions (FUN_0002800a, FUN_00028038/now
+   FUN_00028082 after further splitting) -- see new item 11 below.
+   FUN_0002f490 CHECKED 2026-07-23: NOT an orphaned duplicate function --
+   it's unprogrammed 0xFF flash filler (64 bytes read, all 0xFF), same
+   category as the other confirmed-blank regions in item 11. The stale
+   xref from the switch at 0x28b50 pointing to it is a leftover of the
+   exact same stale-computed-jump-xref bug already fixed for this switch
+   (0x2800c) -- the real jump table at 0x28b52 (read directly, 8 words) only
+   targets 0x28b62/8b89/8ba8/8c5a/8c78/8c83/8cba/8cc8, all in 0x28xxx, none
+   at 0x2f490. Closed -- no action needed beyond noting the stale xref if a
+   future cleanup pass touches this switch's xref table.
+   Open: any reader for f510/f512, physical meaning of any bit, the <0xC0
+   pointer table, and SCI1-vs-SCI3 reachability. Full detail
+   in mut_verification_status.md.
 
-   SILICON-LEVEL PIN MAPPING CONFIRMED (2026-07-14 session): per the H8/539F
-   hardware manual (Appendix D.3, Table D-19 / Fig 10-27), P5DR bit 4 = P54,
-   which is multiplexed with T2IOC1 (16-bit IPU Timer 2, Input Capture/Output
-   Compare channel 1) -- a genuine hardware timer capture-capable pin, not an
-   arbitrary GPIO. The ISR polls it via plain software bit-test
-   (btst.b 0x4,@0xfe8a:16), not via the IPU capture hardware path. This
-   supports (does not refute) the cam-position-sensor theory. Note: the
-   function has since been renamed isr_ipu_ch2ch4_input_capture, correcting
-   the isr_sci3_eri mislabel referenced above -- so that rename is DONE.
-   Plate comment added at 0x168e3 documenting the pin-mapping confirmation.
-   REMAINING OPEN: this only confirms the SILICON pin identity (P54/T2IOC1).
-   The BOARD-level wiring -- whether P54/T2IOC1 on this specific ECU's
-   pinout is physically connected to the RVR's camshaft position sensor --
-   is a separate step. PARTIAL PROGRESS (2026-07-14, continued): the user's
-   "RVR GTA AIRTREK space gear 4cyc PCM.xls" harness pinout was read. It
-   confirms the RVR harness has TWO separate, distinct sensor pins relevant
-   here, both populated on the RVR column (not just 4G64-specific):
-     - Pin 45 (wire G-R): "E/C; Crank angle sensor"
-     - Pin 56 (wire L-Y): "E/C; Cam position (exhaust VVT 4g64)" -- despite
-       the "(4g64)" suffix in the label text, this pin IS populated with a
-       wire color for RVR (C69='L-Y'), so it is present on the RVR harness,
-       not 4G64-exclusive as the label might suggest at a glance.
-   This is ECU-CONNECTOR-pin numbering (1-66ish), NOT H8 chip pin numbering.
-   No connector-pin-to-H8-chip-pin schematic exists for this ECU (confirmed
-   by the user, 2026-07-14) -- CLOSING this item at the current confidence
-   level rather than leaving it open pending a document that won't surface.
-   FINAL STATE: P54/T2IOC1 (polled by isr_ipu_ch2ch4_input_capture) is the
-   best available RPM candidate. Structural evidence (simple single-edge
-   period-delta, no missing-tooth sync logic, unlike the confirmed crank ISR
-   isr_tpu3_tgi3a which does implement missing-tooth sync) favors this being
-   the cam-position signal (harness pin 56) rather than the crank-angle
-   signal (harness pin 45), consistent with the original 2026-07-13
-   reasoning. This is inference from ISR structure, not a proven pin-level
-   trace, and should be labeled as such wherever cited. Do not resume
-   searching for a schematic-based confirmation of this mapping.
+7. MUT BLANK/actuator sweep -- mostly resolved, full detail in
+   mut_verification_status.md. Confirmed: EECA/EECC (mode-shadow copies,
+   isc_eeca_eecc_eece_correction_calc), F3FB/F3FD (real low bytes of
+   F3FA/F3FC, not scraper artifacts), F971/F972 (real low/high bytes of
+   F970/F973, closing that cluster). Reusable technique for whoever
+   continues this: per-address xref search on BLANK cells is a dead end
+   (known indirect/bank-prefixed blind spot) -- search from the PRODUCER
+   side instead (search_functions on "calc"/"duty"/"target"/"stepper",
+   cross-check write addresses against the table), prioritizing BLANK rows
+   adjacent to already-CONFIRMED cells.
+   Separately (EFI/TCU XML cross-check): ReqID 0x1C/F187 = ECULoad (was
+   BLANK, now fixed); ReqID 0x00 has a third conflicting claim (gmas/Airflow
+   vs LoadMUT2Byte) on top of an existing GalantLegnum conflict, likely
+   genuinely ROM-revision-dependent, not a single stable value. NEW SCOPE,
+   NOT YET WORKED: the TCU-side XML has its own 13-entry MUT RequestID
+   scheme (AT_ID1-3, AT_Temp, gear states, shaft-speed pulses, AT_Brake,
+   AT_ClearDTC), entirely separate from every tcu_* function traced so far --
+   no TCU-side equivalent of adc_sensor_convert_single/the 0x2fad0 table has
+   been located yet.
 
-   SECOND OUTPUT TAP CONFIRMED (2026-07-15 session): re-checked
-   isr_ipu_ch2ch4_input_capture now that the user's core changes fixed the
-   decompiler garbage on nearby functions - raw disassembly was already clean,
-   but the fix made downstream callers (tcu_torque_converter_slip_calc,
-   tcu_shift_ratio_buffer_update) tractable to read directly instead of relying
-   on disassembly alone. Confirmed the ISR's falling-edge branch (@0x169dc)
-   computes an independent normalized period-delta into F5D6/F5D8 (written
-   @0x16a38/0x16a3c), separate from the already-documented F5D2/F5D4->F5DE
-   chain. F5D6/F5D8 is consumed by tcu_periodic_dispatch (@0x2c12b) ->
-   tcu_shift_ratio_buffer_update (@0x2c16e), which converts it into a
-   gear-indexed ratio estimate with rate limiting for TCU shift logic.
-   Two independent downstream consumers (torque-scale calc and TCU
-   shift-ratio logic) drawing period data from the same 2-tooth cam capture
-   is corroborating evidence this is a genuine engine-speed signal. Plate
-   comments added to all three functions. Still open: absolute RPM
-   scale/units (timer tick rate + the 0x10 divisor's real-world meaning not
-   yet derived), and the board-level P54/T2IOC1-to-sensor wiring confirmation
-   noted above.
+8. Unify H8/520, H8/538, H8/539F onto one shared instruction-decode core --
+   confirmed via IDA's ana.cpp (a single generic H8/500-family decoder that
+   never branches on chip model) that the full 63-instruction ISA and
+   control-register set are identical across all three; only the memory map
+   and peripheral set differ, and that's already isolated per-chip in each
+   .pspec. Current state: h8539f.slaspec is the mature, actively-verified
+   implementation; h8520.slaspec is a fully independent 1827-line grammar
+   with the same CR8/CR16 unguarded-fallback bug h8539f already fixed, and
+   no `sleep` instruction at all; h8538f.slaspec is an empty stub, not
+   usable as-is. DECISION: hold off on porting until h8539f's own open items
+   are resolved, then factor the branch/arith/logic/bit/mem .sinc files out
+   as a shared core with each chip keeping only a thin wrapper .slaspec plus
+   its own .pspec -- this retroactively fixes h8520's divergence rather than
+   hand-porting each fix individually. Intentionally out of scope for the
+   port itself: which operating mode (minimum/maximum) the real H8/538 and
+   H8/520 target ROMs actually run in (doesn't affect the shared decode
+   grammar, only each chip's .pspec context-register defaults); a full
+   instruction-by-instruction completeness audit of h8520.slaspec against
+   h8539f's .sinc files (not yet done -- the datasheet says the ISA is
+   identical, but that's not been mechanically verified).
 
-   UPDATE (2026-07-15 session): continued the SCI1 command-dispatcher thread
-   (sci1_meta_cmd_dispatch_c0_ff @0x28869) found in the prior session. Fully
-   decoded its 0xC0-0xD8 actuator bit-table (ROM 0x13740) and traced three
-   real consumers/producers of the @0xf516/f512/f510 flag registers:
-     - f516 bits 2/5/6/8 (set by commands C3/C4/FA) -> consumed by
-       f516_request_latch_f09a_calib_select (0x27e1a, renamed from
-       eeea_bit7_f09a_update) - a calibration selector for output f09a.
-     - f516 bit7 (set by command FC) -> consumed by
-       eee0_eeee_diag_flags_reset_dispatch (0x282c1) -> calls
-       startup_phase_reset_eed6_eefa_bulk (0x28413), the SAME bulk-reset
-       function already known as one of Load1B's two writers. So command
-       0xFC is a live, on-demand trigger for that reset, not just a startup
-       path - a new, concrete fact for the Load1B item in
-       mut_verification_status.md.
-     - f516 bit11 -> traced to an UNRELATED periodic phase-sequencer,
-       f588_duty_gate_f516_bit11_set (0x28b62), which is a computed-jump
-       branch inside sci1_periodic_phase_dispatch_f526 (0x28b2f, renamed
-       from FUN_00028b2f, called from sci1_protocol_state_machine 0x287af).
-       That parent function has real decompiler trouble (Bad Instruction /
-       unresolved-jump-table warnings) - ADDED to the ~140 Bad Instruction
-       backlog mentioned above as a fresh, specific candidate for a proper
-       re-split, rather than left as an anonymous FUN_ entry.
-   Renamed 5 functions total this session (f516_request_latch_f09a_calib_select,
-   f516_hibits_f520_f0f2_mode_select, sci1_periodic_phase_dispatch_f526,
-   f588_duty_gate_f516_bit11_set, f528_f52e_zero_f526_advance_alt_branch) and
-   added plate comments to all of them plus the dispatcher and
-   eee0_eeee_diag_flags_reset_dispatch. Still open: writer for f516 bits
-   1/12/13/15, any reader for f510/f512, physical meaning of any bit, the
-   <0xC0 pointer table, and SCI1-vs-SCI3 reachability. Full detail in
-   mut_verification_status.md's dispatcher section - this is a pointer entry
-   only, per this file's existing pattern of keeping non-RPM MUT/dispatcher
-   detail in that file.
+9. SP24/FP24/DP/EP page-register banking vs Ghidra's stack-frame analyzer --
+   superseded. Full investigation (SP/FP fix, EP/DP constresolve limits,
+   R0:R1 revert) now lives in review9.md.
 
-7b. MUT BLANK/actuator tracing sweep, round 2 (2026-07-15 session, IN PROGRESS)
-    Started working through the ~150 BLANK/NAMED-untraced MUT RequestID
-    table rows, and separately identifying which confirmed cells are true
-    MUT "requests" (values a scan tool reads) vs "actuators" (values that
-    drive real hardware - stepper, duty cycle, solenoid). Full detail,
-    including the reusable approach/pattern notes, is in
-    mut_verification_status.md's "MUT BLANK/UNTRACED SWEEP, ROUND 2"
-    section - this is a pointer entry only, same convention as item 7.
-    Resolved this round: MUT ReqID 0x08 (EECA) and 0x0A (EECC), both
-    mode-shadow copies of one ISC correction value
-    (isc_eeca_eecc_eece_correction_calc @0x27a81, plate comment added).
-    Also traced three actuator-driver functions for reference (not MUT
-    IDs themselves, but establish the request-vs-actuator shape and feed
-    confirmed cells): canister_purge_duty_calc_f4ac (F4AC, canister purge
-    duty - its F0BA write was already captured in item 7's writer list,
-    0x19560 entry, checked and confirmed no update needed there),
-    egr_duty_target_calc/egr_target_f448_update (F448, EGR duty target),
-    isc_f402_stepper_target_calc (F402, ISC stepper target, upstream of
-    the EECA/EECC finding). All five functions traced this round got
-    plate comments; no renames needed, existing names already accurate.
-    New lead RESOLVED same session: checked whether MUT ReqID 0x09 (F3FB)
-    and 0x0B (F3FD) are a real structure or scraper artifacts of the
-    F3FA/F3FC/F3FE mode-shadow triplet (isc_f3fa_f3fc_f3fe_correction_calc,
-    0x27990) - CONFIRMED real, not artifacts: verified against
-    adc_sensor_convert_single (0x171c3)'s single-byte fetch logic for
-    ReqID<=0xBF, which reads exactly one byte at the table-decoded address.
-    F3FB/F3FD are genuinely the low byte of the big-endian F3FA/F3FC words.
-    Table updated to CONFIRMED for both rows; plate comment updated. This
-    is a different outcome than the F5C0 cluster's 0x81/0x82 rows (those
-    WERE artifacts) - the general lesson (word-store + odd-offset ReqID
-    is not automatically an artifact either way) is logged in
-    mut_verification_status.md for future adjacency checks.
-    Approach note for whoever continues this: per-address get_bulk_xrefs
-    on BLANK cells is a dead end (known indirect/bank-prefixed blind
-    spot, re-confirmed on EEEF/EEF3/F161/F15B this round with zero new
-    info). Search from the PRODUCER side instead -
-    ghidra:search_functions name_pattern "calc" (also try "duty",
-    "target", "stepper") and cross-check write addresses against the
-    table. Prioritize BLANK rows adjacent to already-CONFIRMED cells.
+10. "Unable to track spacebase fully for stack" warning -- STATUS: real
+    mechanism identified via live pcode inspection; no fix implemented yet;
+    not upstream-filing material (same general class as Ghidra's own x86-16
+    issues #817/#5199).
 
-    RESOLVED same session: F971 (0x2A) and F972 (0x2B), the two POINTER
-    leads carried over from the 2026-07-14 sweep, are now CONFIRMED.
-    Decompiling fuel_pw_and_airvol_compute (0x29fba) and
-    injpw_airvol_reset_on_fuelcut (0x24680) directly showed both
-    InjPulseWidth (F970/F971) and AirVol (F972/F973) are single 16-bit
-    big-endian words with no independent byte-level writer -- F971 is
-    just F970's low byte, F972 is just F973's high byte, same idiom as
-    the already-confirmed F3FA/F3FB and F3FC/F3FD pairs. This closes the
-    F970-F973 cluster entirely. Confirms the general lesson: for a BLANK
-    row sitting next to a CONFIRMED word-value cell, decompiling the
-    writer function directly beats another round of bulk-xref attempts.
-    Full detail in mut_verification_status.md's sweep section.
+    Affects at least 18 structurally-unrelated functions: isr_sci1_eri,
+    isr_tpu5_tci5u, isr_tpu5_tgi5a_sci1_rx_poll,
+    isr_tpu5_tgi5b_sci1_tie_clear, axis_interp_lerp_u8frac,
+    axis_lookup_interp, div_s32_s16_rounded, div_u16_rounded, div_u16_sat,
+    div_u32_u16_rounded, div_u32_u16_sat, muldiv_s16_rounded,
+    muldiv_s16_rounded_3op, muldiv_u16, muldiv_u16_scaled,
+    f26e_cluster_accumulator_unrelated_to_ihex, sci1_boot_build_data_frame,
+    weighted_blend_u8frac. Ruled out as causes: the R0:R1 cspec work (item 9
+    above); EP/DP dynamic banking (only 3 of the 18 touch DP/EP dynamically
+    at all -- the other 15, including isr_sci1_eri, don't); which return
+    instruction is used (rts/prts/rte all appear on both warned and clean
+    functions); default_proto vs an explicit calling convention (three
+    default_proto, rte-ending sibling ISRs -- isr_sci2_eri, isr_nmi,
+    isr_adi_adc -- decompile perfectly clean).
 
-7c. EFI/TCU MUT profile cross-check against user-uploaded XML (2026-07-15)
-    User uploaded Mitsubishi_MUTII_EFI.xml and Mitsubishi_MUTII_TCU.xml
-    directly. Full detail in mut_verification_status.md's "EFI/TCU MUT
-    PROFILE CROSS-CHECK, ROUND 2" section - pointer entry only, same
-    convention as items 7/7b.
-    Headline findings: (1) ReqID 0x1C/F187 was BLANK, XML names it
-    ECULoad - a miss from the original 2026-07-13 table build, now fixed.
-    (2) ReqID 0x00 has a THIRD conflicting claim from within this same
-    XML (gmas/"Airflow Rate gm/s" vs LoadMUT2Byte), on top of the
-    GalantLegnum switch-flags conflict already on record - this ID looks
-    genuinely ROM-revision-dependent, not a single stable value. (3) The
-    XML's own "FC = Clear EFI Diagnostic Codes" label corroborates this
-    session's earlier structural finding (this file's "UPDATE 2026-07-15"
-    paragraph above) that SCI1 command 0xFC triggers a bulk diagnostic-
-    flags reset - independent confirmation of the semantic meaning, not
-    just the structural behavior.
-    NEW SCOPE OPENED, NOT YET WORKED: the TCU XML reveals a completely
-    separate MUT RequestID scheme for the transmission side (13 entries -
-    AT_ID1-3, AT_Temp, AT_Park/Reverse/Neutral/Drive/Low/2nd/3rd, shaft-
-    speed pulses, AT_Brake, AT_ClearDTC), distinct from every tcu_*
-    function traced so far in this project (all of which came from the
-    RPM thread, not from tracing this ID scheme). No TCU-side equivalent
-    of adc_sensor_convert_single/the 0x2fad0 table has been located yet.
-    Flagged as its own future work item, not folded into the EFI table.
+    MECHANISM, confirmed against Ghidra's actual decompiler source
+    (coreaction.cc, ActionStackPtrFlow::analyzeExtraPop / StackSolver): the
+    analysis only runs when a function's prototype has extrapop="unknown"
+    (true for anything on default_proto in this cspec). It builds a system
+    of linear equations from every stack-pointer-derived varnode, including
+    CPUI_INDIRECT ops at call sites to callees whose own extrapop is
+    unresolved (which get a guessed equation, not a derived one). The
+    warning fires per-unsolved-variable when that system can't be solved.
 
-6. Unify H8/520, H8/538, and H8/539F onto a single shared instruction-decode
-    core, instead of three independent implementations
-    Confirmed this session, via the grepable hardware manuals and IDA's own
-    ana.cpp (which is a single generic decoder for the entire H8/500 family,
-    never branching on chip model or mode): the full H8/500 instruction set
-    (63 instructions) and control-register set (SR/CCR/CP/DP/EP/TP/BR) are
-    identical across H8/520, H8/538, H8/539, and H8/539F. Only the
-    memory map and peripheral register set differ per chip -- already
-    correctly isolated in each chip's .pspec.
-    Current state is three independent, unsynchronized implementations:
-      - h8539f.slaspec (+ 5 .sinc files): the mature, actively-verified one.
-        Has had the MAP5 work, the CR8/CR16 guard fix, sleep/rtd opcode
-        fixes, MAP4 dispatch fixes, cmp:g cross-EA fixes, and this
-        session's compile verification.
-      - h8520.slaspec: a fully separate, monolithic 179KB/1827-line
-        grammar with zero @include, written independently (different
-        token names throughout: addrMode/instr8/special/addrByte/
-        addrLong/pageByte vs h8539f's opcode/opcode_special/map4/map5/i8/
-        i16/eab_*/eaw_*). Confirmed this session to still have the exact
-        same CR8/CR16 unguarded-fallback bug (BUG 7) that was found and
-        fixed in h8539f.slaspec -- bare `& CR8`/`& CR16` constructors with
-        no index constraint in its stc/ldc/andc/orc/xorc forms (lines
-        842-857, 1019-1020, 1030-1031, 1041-1042, 1074-1091). `sleep`
-        appears entirely absent (grep for "sleep"/"SLEEP" returns zero
-        matches). Per the user (2026-07-14), not worth a standalone check --
-        this and any other h8520-specific divergence will be resolved
-        naturally once the single shared-core unification described below
-        replaces h8520's independent grammar. Other known h8539f bug
-        categories (MAP4 dispatch gaps, cmp:g cross-EA gaps, the rtd/bra
-        collision) have not yet been checked against it, same reasoning.
-      - h8538f.slaspec: essentially an empty stub (40 lines, one dummy
-        `:MOV.W is op8=0x5f {}` constructor, 16-bit-only address space, no
-        24-bit FP/SP extension). Not usable as-is.
-    Decision (this session): hold off on porting until h8539f's own open
-    items are fully resolved, since a unification done now would just be
-    porting known-incomplete work. Once h8539f is stable, the plan is to
-    factor its branch/arith/logic/bit/mem .sinc files out as the shared
-    canonical core, with each chip keeping only a thin .slaspec wrapper
-    (register/address-space setup + @include) and its own .pspec. This
-    will retroactively fix h8520's CR8/CR16 bug and everything else h8520
-    independently diverged on, without hand-porting each fix individually.
-    Two things intentionally NOT yet resolved and out of scope for the
-    port itself:
-      - Which operating mode (minimum/maximum) the real H8/538 and H8/520
-        target ROMs actually run in. Confirmed this doesn't affect the
-        shared instruction-decode grammar (ana.cpp/emu.cpp treat page
-        registers as IDA-style tracked segment registers -- minimum mode
-        is just maximum mode with them pinned at 0), but it does affect
-        each chip's .pspec context-register defaults, which stay
-        chip-specific after the port.
-      - A completeness audit of h8520.slaspec against h8539f's .sinc
-        files hasn't been done yet -- the datasheet says the ISA is
-        identical, but that hasn't been mechanically verified instruction-
-        by-instruction, so there's a small chance something genuinely
-        520-specific would need preserving rather than dropped in the
-        swap-over.
+    RE-DIAGNOSED VIA LIVE PCODE (2026-07-23), isr_sci1_eri specifically:
+    Instruction.getPcode() on the raw SLEIGH output (before any decompiler
+    analysis runs) for "stc.b EP,@-SP" shows:
+      SP = SP - 1                                     (INT_SUB)
+      ptr24_tmp = CALLOTHER(spSegment, TP, SP)         (unique, 4 bytes)
+      tmp = COPY(EP)
+      STORE(ram, ptr24_tmp, tmp)
+    and the identical shape recurs for every push/pop in the function --
+    both pjsr-embedded pushes and all four rte-embedded pops -- eight
+    occurrences, zero exceptions. SP's own storage is clean (plain
+    INT_SUB/INT_ADD, one of the solver's recognized shapes), but the
+    STORE/LOAD *address* -- what the solver actually needs to resolve, to
+    alias each access back to a stack slot -- is CALLOTHER(spSegment, TP,
+    SP) in every case, and CALLOTHER isn't one of the solver's 5 recognized
+    op shapes (INT_ADD/COPY/INDIRECT/MULTIEQUAL/INT_AND). This is the
+    concrete, per-address confirmation of the general mechanism above, for
+    this specific function.
 
---------
+    UNTRIED FIX CANDIDATE: TP is a tracked_set context register with a
+    compile-time-constant default of 0. spSegment is declared only as a
+    bare `define pcodeop spSegment;` (h8539f.slaspec line 323) with no
+    <callotherfixup>/pcode injection defined anywhere in the .pspec or
+    .cspec -- nothing currently tells the decompiler how to expand it.
+    Adding a callotherfixup that expands spSegment(TP, SP) to concrete
+    arithmetic (e.g. zext(SP) when TP==0, falling back to the full segmented
+    form otherwise) would make the address transparent to constant folding
+    and the spacebase solver in the common case, without any upstream
+    Ghidra change. NOT YET IMPLEMENTED OR TESTED -- this is the next
+    concrete step if pursued.
 
-8. SP24/FP24/Rn_banked "unaff_SP" decompiler regression -- segmentop follow-up
-   to the tracked_set fix (test/bugs.txt notes, 2026-07-15)
-   -----------------------------------------------------------------------
+    Treated as cosmetic/expected in the meantime: decompiled output is
+    still numerically correct on every function checked so far (e.g.
+    isr_sci1_eri's own body decompiles to a correct, if warning-flagged,
+    call+return). Revisit filing upstream only if the callotherfixup
+    experiment surfaces something not already covered by #817/#5199, or if
+    a function's decompiled output is ever found to be actually wrong (not
+    just warned).
 
-   REPRO CONFIRMED (2026-07-15, same session): test/RVR_1998_x3 4g63t
-   21000011 md352553.hex_old.c (pre-tracked_set) vs the current
-   test/RVR_1998_x3 4g63t 21000011 md352553.hex.c (post-tracked_set) are the
-   full pre/post decompile dumps for this ROM and confirm the tracked_set
-   fix changed the failure mode rather than fixing it in general -- not a
-   theoretical gap, an actual regression visible on hundreds of functions.
+11. Function-boundary / undefined-code-gap sweep (2026-07-23) -- prompted by
+    the item 6 fix above. Used find_code_gaps (84 gaps ROM-wide initially) and
+    manually inspected raw bytes at each gap before acting -- size/heuristic
+    flags alone were not reliable (many "orphaned instruction" gaps were
+    genuine 0xFF erased-flash filler or repeating-constant data tables, not
+    missed code; conversely many "no orphaned instructions" gaps were real
+    unbound code). Also checked for mid-function prts/rte occurrences
+    ROM-wide (search_byte_patterns on 1119 and 0a0a) as a possible signal of
+    wrongly-absorbed function boundaries elsewhere -- none found; every real
+    rte/prts hit landed exactly at a correct function's tail. The apparent
+    extra 0a0a hits were inside a data table (0x12995, an arithmetic
+    progression 00/0a/14/1e...), a reminder that raw byte-pattern search
+    needs manual byte inspection before acting, same lesson as item 3.
 
-   Minimal example, sat_add_u16 (line ~1945 in both files):
-     PRE  (_old.c): `undefined1 auStack_2 [2]; ... *(undefined2 *)ZEXT24
-          (auStack_2) = unaff_FP;` -- wrong target (a fabricated stack-local's
-          address, not the real banked SP), but at least consistently
-          produces a 24-bit ZEXT24 pointer shape.
-     POST (.c):     `short unaff_SP; ... *(undefined2 *)(uint)(ushort)
-          (unaff_SP - 2U) = unaff_FP;` -- SP is now an unresolved bare
-          16-bit `unaff_SP` local (Ghidra gave up on stack-frame recovery
-          entirely for this function), and every derived address is pushed
-          through a `(ushort)` cast before being widened back to `(uint)`.
-          The TP page term is simply gone -- there is no zext(TP)<<16
-          anywhere in the post-fix output for this function. This is a
-          narrower pointer than the buggy pre-fix version, not a corrected
-          one.
+    22 new functions created and verified this session (each: dry-run,
+    create, get_function_by_address to confirm sane non-overlapping bounds):
+      FUN_0002800a (0x2800a, 46b), FUN_00028082 (0x28082, 60b, formerly
+        FUN_00028038's absorbed tail), FUN_00027fb1 (0x27fb1, 52b),
+      FUN_00024cd2 (0x24cd2, 36b) -- also caused Ghidra to auto-discover
+        FUN_00024d36 immediately after it,
+      FUN_00014079 (71b), FUN_000140fc (47b), FUN_0001431f (77b),
+      FUN_000143e8 (69b), FUN_00014502 (9b), FUN_0001460d (72b),
+      FUN_00014838 (28b), FUN_0001497b (44b, gap RESOLVED 2026-07-23 --
+        see below),
+      FUN_000164f8 (13b), FUN_00016505 (13b, second small function found
+        immediately after FUN_000164f8), FUN_00016786 (63b),
+      FUN_0001a146 (22b), FUN_0001a2d0 (22b), FUN_00022898 (85b),
+      FUN_000254dd (103b), FUN_0002561d (14b), FUN_00026982 (135b),
+      FUN_00027644 (143b, gap RESOLVED 2026-07-23 -- see below),
+        FUN_000278ef (68b), FUN_00027bc6 (37b).
+    Gap count dropped 84 -> 68 after this pass, all as expected shrinkage
+    (no new gaps appeared elsewhere -- ROM-wide total is stable).
 
-   Confirmed systemic via grep across both files (hundreds of matching
-   functions, not an isolated case): div_u32_u16_rounded (~line 2165) shows
-   the identical shape (unaff_R3/R4/FP/SP all unresolved, all masked through
-   `(ushort)` before use). Caller sites are inconsistent about it too --
-   compare 21000011.hex.c:3401 (`CONCAT12(uVar14, unaff_SP + -0x2a)`, a page
-   byte concatenated back on) against :8600 (`(uint)(ushort)(unaff_SP - 8)`,
-   plain 16-bit truncation, page term dropped) for calls to the *same*
-   callee (sat_add_u16) a few hundred lines apart -- the decompiler isn't
-   applying one consistent recovery strategy, it's falling back
-   per-call-site depending on what it could locally infer.
+    Confirmed genuine 0xFF filler / real data tables, NOT missed code (left
+    untouched): the isr/flag-check cluster's small 1-15 byte gaps
+    (0x1519d, 0x175ef, 0x193ec, 0x185f3, 0x19191, 0x1a2fc, etc.), the boot
+    region's 0x20d42/0x20de3/0x21edf/0x22f92/0x24e5d/0x260e5/0x28e90/
+    0x28f23/0x2a930/0x2b832, and the three huge regions 0x10152-0x12170
+    (repeating f9c4/f9ba-style pointer table), 0x1a49a-0x1ffff, and
+    0x2cee4-0x2ffff (both confirmed 0xFF filler/reserved flash space).
 
-   Working theory (needs confirming against SLEIGH/decompiler internals,
-   not yet verified): pinning TP/DP/EP to a tracked constant 0 gave the
-   decompiler's parameter-ID/stack-frame pass enough to constant-fold the
-   *value* of SP24 in isolated expressions, but stopped it from recognizing
-   SP24 as ever being derived from the <stackpointer> register SP at all --
-   i.e. it satisfies parameter recovery's local dataflow check but breaks
-   whatever heuristic previously linked SP24 back to the real frame,
-   so the stack-frame analyzer now bails out to unaff_SP/unaff_FP (raw
-   unresolved register reads) instead of either the old wrong ZEXT24 guess
-   or a correct one. This would explain why bugs.txt's segmentop suggestion
-   points at the right mechanism (Ghidra's stack-frame analyzer only
-   recognizes <stackpointer> being adjusted directly) even though the
-   proximate trigger turned out to be the tracked_set change, not the
-   original zext/shift/OR pattern by itself -- tracked_set didn't introduce
-   the underlying design gap, it just changed which code path exposes it.
+    NOT YET RESOLVED, flagged as higher-risk (real, varied, non-filler
+    bytes present but deliberately not touched given this region's
+    documented fragility -- see item 4's BUG 5 class of issue):
+      0x20208-0x202b1 (170b), 0x2031e-0x2036c (79b, borders the
+        scratch_pjmp_demo experimental stub), 0x20747-0x20771 (43b),
+      0x2077d-0x2077e (2b) -- all inside/adjacent to
+        sci1_boot_ihex_colon_record_decode_dispatch's boot-record parsing;
+      0x20134-0x2014b (24b) and 0x20a14-0x20a7f (108b) -- ambiguous,
+        short/irregular byte patterns that could be small data tables
+        (flash constants) rather than code, not confidently classified
+        either way.
+    RESOLVED 2026-07-23: 0x149a7-0x149c7 (33b) and 0x276d3-0x276fa (40b),
+    the two residual slivers left by the two partial fixes above -- same
+    dry-run-create-verify method as the rest of this pass. Both raw byte
+    reads showed varied, non-repeating bytes (not filler); both dry-run
+    creates produced clean, exact-size bodies with no overlap warnings;
+    both decompile cleanly with no decompiler garbage/warnings:
+      gear_indexed_table_lookup_f1fc (0x149a7, 33b) -- gear-indexed table
+        lookup (uses f1fc, the same gear-index register as the SCI1
+        dispatcher's EC-EF case), reads *(stack_param + (f1fc & 7)*4).
+      f0f8_gated_constant_select_f3f4_neighbor (0x276d3, 40b) -- small
+        mode-selected constant picker gated on f0f8 bits 4/0, structurally
+        similar to the neighboring f3f4_bit2_3_4_hysteresis_gate_check
+        (0x27644).
+    Neither has any incoming xref yet (get_xrefs_to: none found for either)
+    -- same situation as several of the other 22 functions from this pass,
+    likely reached via computed/indirect calls given FUN_000149a7's own
+    gear-index-table-lookup shape. Not itself concerning; call-site tracing
+    not yet done for either, low priority given the physical meaning of
+    f1fc/f0f8 in this context is already established elsewhere.
 
-   RESEARCH (2026-07-15, this session): checked two real-world reports of
-   segmentop on a non-x86 `space="ram"` data widening (same shape as ours --
-   a narrow SP/offset register widened into a larger flat ram space):
-     - Ghidra discussion #2749: someone with the identical problem (2-byte
-       SP, 4-byte ram space) confirms "using the segmentop in the pspec was
-       the way to go" -- but had to set `type="protected"` to get correct
-       segmentation, and notes protected pulls in Ghidra's x86-16-protected-
-       mode analyzers even on non-x86 hardware (side effect, not confirmed
-       harmful here, but unverified).
-     - Ghidra issue #841: someone else applied segmentop to `space="ram"`
-       using the textbook x86-real-mode shape (INT_ZEXT/INT_LEFT/INT_ZEXT
-       baseop/innerop, same as ours would be) and got the decompiler to
-       alternately crash or silently eliminate the segment and dereference
-       a raw constant instead -- a worse failure mode than today's
-       unaff_SP, not a better one.
-   Conclusion: segmentop is a real, precedented fix for exactly this shape
-   of problem (bugs.txt's core claim is right), but it is not a
-   drop-in guaranteed win -- outcomes on `space="ram"` specifically are
-   mixed in the wild, and one report is a stability regression, not just a
-   cosmetic one. This justifies a staged rollout (below) instead of a single
-   rewrite of every banking site at once, and specifically justifies why
-   step 1 is scoped to SP alone before DP/EP are touched.
+    TO CONTINUE: same method (read real bytes first, dry-run create,
+    verify bounds against neighbors) -- do NOT run Ghidra's built-in
+    "Function Start Search" analyzers over this region; per manual
+    inspection during this session they add nothing for already-defined
+    code and risk re-triggering the same heuristic mis-splits that caused
+    the original absorption bugs (item 6, and originally
+    sci1_boot_switch_case4_frag_20640/0x20640).
 
-   PLAN (not yet started -- this is the agreed approach, execute stepwise,
-   confirm each step before starting the next):
+----------------------------------------------------------------------------------
+12. Cross-binary function matching -- superseded. Full checklists and
+    ongoing matching work now live in test/functions_evo5.md and
+    test/functions_w4a51.md.
 
-   Step 0 -- safety net (no code change):
-     Confirm the current .sla in the Ghidra install is backed up /
-     reproducible from source control before any experimental compile, per
-     this file's existing "Build/test workflow" section below (delete-and-
-     regenerate is already documented as the recovery path if a bad .sla
-     gets installed -- just confirm the source-controlled .slaspec/.sinc
-     are committed as of now, so "revert tracked_set" and "revert segmentop
-     experiment" are both one `git checkout` away, not a manual rewrite).
+13. DAT_ global address renaming -- REOPENED (2026-08-17): the 2026-08-16
+    "CLOSED, zero hits" claim below was WRONG. Live list_globals(filter="DAT_")
+    just returned 7 remaining unnamed globals: DAT_0000f00e, DAT_0000f012,
+    DAT_0000f014, DAT_0001f1fe, DAT_0000f38c, DAT_0000f3cc, DAT_0001ef90.
+    Do not trust "zero hits" without re-running list_globals live first.
+    NOT YET INVESTIGATED this session -- next step is the same method as the
+    batches below (get_bulk_xrefs under both bank-prefix forms, decompile the
+    owning function, name from confirmed behavior, no blind guessing).
 
-   Step 1 -- SP-only segmentop spike, isolated: DONE / PASSED.
-     unaff_SP is fixed -- segmentop confirmed to work for this data-space
-     (ram) widening case. Proceeding to Step 2 (FP extension) below.
+    Prior (inaccurate) closure note retained for its batch history below:
+    Two batches:
+    - 0x1ef04/0x1ef0c/0x1ef0e/0x1ef1c: a 6-slot TCU gear-ratio rolling
+      history buffer (init sentinel 0x8000/0, shifted in from F5FA-F610 on
+      each shift event) plus a status/latch word, both consumed by
+      tcu_gear_shift_history_reset (0x2b880) and tcu_gear_ratio_calc
+      (0x2cac4). Named g_tcu_gear_ratio_hist_slot0_lo/slot2_lo/slot2_hi/
+      status_flags.
+    - 36 addresses across 0x0000ee82-0x0000eff2: traced via get_bulk_xrefs
+      (both bank-prefix forms checked per the project's own documented
+      blind spot) to their owning functions and decompiled for confirmed
+      behavior before naming -- no blind guessing. Covers: knock-event
+      counter and octane-level MUT output (eec6/eec8, cross-verified
+      against knock_event_counter_update_eec6 and
+      octane_level_compute_from_knock_counter's existing plate comments);
+      ISC stepper reload state (eed0/eed4, matched to the existing
+      isc_stepper_position_eed0 name already present at the 0001-prefix
+      form); the F09A calibration-select latch chain (eeea/ef6e, per
+      f516_request_latch_f09a_calib_select's plate comment); TCU
+      torque-converter-slip flags (eedc/eef8/eefa); RPM-capture-ISR
+      per-channel settle counters (ef66/ef68, isr_ipu_ch2ch4_input_capture);
+      and a ~20-address cluster entirely inside tcu_rx_main_scheduler
+      (scheduler tick counters, ramp trackers, status gates, and the TCU
+      RX-frame timeout/reinit state already documented in that function's
+      plate comment). Full address-to-name mapping is in the Ghidra
+      project itself (list_globals), not duplicated here.
+    Two names (g_tcu_rx_sched_state_ee84, g_tcu_rx_sched_state_ef80) are
+    lower-confidence -- both confirmed to live inside tcu_rx_main_scheduler
+    but the decompiler folded their specific access pattern away from a
+    plain-text DAT_ee84/ef80 reference, so the exact per-field role
+    couldn't be pinned down the way the others were. Accurately located,
+    generically named. Revisit via live pcode/disassembly (not decompiler
+    text) if higher precision is ever needed here.
 
-     [original spike plan, kept for reference]
-     Add ONE <segmentop> block to h8539f.pspec, space="ram", scoped to the
-     TP->SP widening only. Try the plain (non-protected) form first, since
-     "protected" pulls in x86-16-analyzer side effects that have no reason
-     to apply to an H8 target -- fall back to type="protected" only if plain
-     doesn't produce a correct decompiler-recognized pointer.
-     Rewrite ONLY the SP24 construction sites to use it -- NOT FP, NOT DP/EP.
-     That's 26 sites in h8539f.slaspec: PUSH/POP macros (2), Rn_banked/
-     Rs_banked/Rn_banked2 SP row (3), r0-r5/fp/sp push table (8) + pop table
-     (8), eab/eaw_predec/predec2 SP row (2), eab/eaw_postinc/postinc2 SP row
-     (2) -- exact line numbers already catalogued this session via
-     grep-project on `zext(TP) << 16`, re-grep before editing since lines
-     will have shifted. Leave every FP-only TP-banked site (6: Rn_banked/
-     Rs_banked/Rn_banked2 FP row, eab/eaw_predec/postinc FP row, r6b_disp8/
-     r6w_disp8) and every disp8_banked/disp16_banked TP row (targetBase=6/7,
-     4 sites) UNCHANGED for this step -- FP doesn't reuse the SP24
-     pseudo-register today and mixing it into the same spike would make a
-     failure harder to attribute to segmentop itself vs. the FP-specific
-     wiring.
-     Compile (sleigh.bat per this file's Build/test workflow section),
-     install, reanalyze the RVR ROM, and decompile sat_add_u16 and
-     div_u32_u16_rounded specifically -- these are this session's confirmed
-     bad repro cases (test/RVR_1998_x3 4g63t 21000011 md352553.hex.c lines
-     ~1946 and ~2165 as of this session). Also re-check the two inconsistent
-     caller sites already identified (21000011.hex.c:3401 vs :8600, both
-     calling sat_add_u16) to see if they now agree.
-     PASS criteria: no unaff_SP/unaff_FP on these functions, no bare
-     (ushort) truncation before a pointer dereference, SP24 shows up as a
-     real recognized stack access (ideally Ghidra's normal stack-frame
-     locals, not a raw computed pointer), decompiler does not crash, and a
-     project-wide reanalyze doesn't introduce NEW "Bad Instruction"/
-     unresolved-constructor bookmarks that weren't there before (compare
-     against review.md's existing "~140 Bad Instruction" baseline count).
-     FAIL criteria (matches issue #841's failure mode): crash, or segment
-     silently eliminated and a raw constant dereferenced instead of a
-     recognized SP-relative access. If FAIL: stop, do not proceed to step 2,
-     record what specifically failed here, fall back to the tracked_set
-     revert already documented above as the interim state, and revisit
-     segmentop only with a different formulation (e.g. the "protected" type
-     the discussion #2749 poster needed) as a separate follow-up spike, not
-     as a next default step.
+14. DP-banked CONCAT decompiler noise -- concluded done, but related
+    return-type/CONCAT cleanup work continues in review4.md, review6.md,
+    and review7.md.
 
-   Step 2 -- SP validated, FP extension: DONE / PASSED (2026-07-21, verified
-     in a fresh project + fresh ROM import per the note below).
+15. Prototype-pass CONCAT/extraout_/unaff_ regression -- superseded. Full
+    investigation and remaining call-site CONCAT/extraout artifact audit
+    now live in review7.md.
 
-     FINAL APPROACH: FP reuses the existing spSegment userop/segmentop
-     (no separate fpSegment) -- see history below for why.
 
-     Verification: sat_add_u16 (0x14000, the documented @(disp8,FP) repro
-     case) now decompiles cleanly with no crash, no unaff_FP, no manual
-     ZEXT24 reconstruction -- resolves to clean stack references
-     (in_stack_00000004 / stack0xfffe) instead.
+ADDENDUM to item 4 -- superseded. The 0x20843/SP-segmented-EA/CP-context
+investigation (isolation tests, SleighDebugLogger breakthrough, #817
+corroboration) now continues in review9.md.
 
-     BUG FOUND + FIXED (2026-07-21): the fpSegment <segmentop> comment block
-     added to h8539f.pspec contained a literal "--" inside an XML comment
-     ("...same approach as SP since it worked -- FP uses...") which is
-     illegal XML (SAXParseException: "The string \"--\" is not permitted
-     within comments"). This made SleighLanguageValidator reject the whole
-     .pspec on language load -- confirmed via application.log, not decompile
-     testing, since a broken pspec fails at language-load time before any
-     decompile is even attempted. Root cause was unrelated to the earlier
-     stale-file/caching issue (see Build/test workflow note above) -- this
-     was a genuine syntax bug in the new content itself. Fixed by replacing
-     the "--" with ";". Re-swept the whole file for any other literal "--"
-     inside comment bodies (excluding the <!-- / --> delimiters themselves)
-     -- none found. Recompiled (exit 0) and reinstalled the full file set;
-     source and install timestamps now match. LESSON: avoid "--" as a prose
-     separator inside XML comments anywhere in .pspec/.cspec files going
-     forward -- use ";" or a single "-" instead.
+----------------------------------------------------------------------------------
+17. Idle Stepper Look-up Table XML address bug -- FIXED (2026-07-27). Both
+    duplicate XML entries declared address="12992", which pointed at an 8-byte
+    runtime lookup-context header (mode byte + 2 RAM pointer refs), not the
+    real data grid -- confirmed via idle_stepper_table_lookup_wrapper
+    (0x268e2) and a direct ROM read. VERIFIED FIX: the real 8x27 ISCVSteps grid
+    starts at 0x1299a (12992+8); both XML entries corrected, logged in
+    CHANGELOG.md. PRECEDENT for later items: this "mode byte + RAM pointers"
+    header-record shape (seen at 0x11ef0, 0x12992, 0x2d5be/0x12a72) is the
+    standard calling convention for the whole table_lookup_interp/
+    table_3axis_interp_triple family, not a bug -- a neighboring table (WGDC
+    Correction vs TPS, 12a72) uses the same shape correctly and needed no fix.
+    Only the Idle Stepper table needed its XML address adjusted; do not
+    blanket-apply the same +8 offset elsewhere without individually confirming
+    corrupted EcuFlash rendering first.
 
-     BUG #2 FOUND + FIXED (2026-07-21, same session): after fixing the "--"
-     above, the second segmentop itself was structurally illegal -- Ghidra
-     only allows ONE <segmentop> per address space. Symptom was NOT a
-     parse/validation error this time but a hard decompiler failure on
-     program open: "Decompiler: Unable to initialize the DecompilerInterface:
-     Could not register program: Low-level Error: Multiple segmentops
-     defined for same space", surfaced first as a generic ecu-setup-script
-     abort ("Decompiler openProgram() FAILED... do a full Ghidra restart"),
-     then confirmed directly by the user. This also left the running Ghidra
-     instance unresponsive to further MCP calls (close_program/
-     list_open_programs both timed out), consistent with a stuck modal error
-     dialog blocking the GUI thread -- required a full Ghidra restart + a
-     fresh ROM re-import to recover, exactly as the abort message said.
-     FIX: removed the second segmentop and its fpSegment pcodeop entirely;
-     FP now calls the SAME spSegment(TP, FP) userop as SP, since the pcode
-     body (zext(base)<<16 | zext(inner)) and base register (TP) are
-     identical for both -- there was never a need for a second userop.
-     BUG #3 FOUND + FIXED (2026-07-21, same session): the rewritten comment
-     explaining bug #2 ALSO contained a "--" (second time in one session --
-     caught by the user, not self-caught). Re-swept both .pspec and .cspec
-     afterward with a tighter regex; both clean.
-     LESSON (updated): "--" as a prose separator in these XML comment blocks
-     is clearly an easy slip to repeat under time pressure -- default to ";"
-     from the start rather than relying on a post-hoc sweep to catch it.
+    RELATED, SAME SESSION: investigated table_3axis_interp_triple (genuine
+    3-argument trilinear primitive, distinct from EcuFlash's "3D" table-type
+    label) -- only ONE real call site chain found (via
+    f250_f252_channel_snapshot_update -> engine_periodic_correction_master_dispatch),
+    passing table pointer 0x1ef0 (EP-banked, physical bank not yet resolved) and
+    secondary arg 1. NOT YET RESOLVED: the table's first mode byte read via
+    `cmp:g.b #0x3,@R4` in the function's disassembly determines whether this call
+    takes the true 3-axis path or a simpler 2-point linear-interp fallback --
+    determining which requires resolving the live EP value at the call site
+    (0x24a3f), not yet done. An earlier same-session flat-address read at
+    0x11ef0 assuming no banking is RETRACTED as unreliable -- do not reuse those
+    byte values. Also retracted: a mistaken link between this table and the
+    unrelated SCALING_OUT_F0CA label (that label comes from a different,
+    already-existing scanner-found scaling table elsewhere in ROM, not from this
+    one). TO CONTINUE: trace back from 0x24a3f to resolve the actual EP/bank
+    value in effect, then re-read the table header correctly banked before
+    concluding anything about its real axis/mode structure.
 
-     VERIFIED 2026-07-21: after the spSegment-reuse fix, compiled clean,
-     reinstalled the full file set, and confirmed via force_decompile in a
-     freshly-restarted Ghidra + freshly re-imported ROM that sat_add_u16
-     (0x14000, @(disp8,FP) addressing) now decompiles correctly with no
-     crash and no unaff_FP. Step 2 marked PASSED above on this basis.
-     FP uses an identical TP-banked shape but
-     currently has NO shared pseudo-register the way SP has SP24 (FP24 is
-     defined as a register at slaspec line 35 but, per this session's grep,
-     is never actually assigned anywhere -- FP-relative accesses build a
-     throwaway `local addr:4` inline instead). Decide during this step
-     whether to route FP through the same segmentop and finally start using
-     FP24 for real (consistent with SP, may help Ghidra's frame-pointer
-     recognition too), or leave FP on the inline local-addr pattern if
-     testing shows no decompiler benefit for FP specifically (FP doesn't
-     have the same push/pop-heavy call pattern as SP, so the "unaff_FP its
-     own stack-frame-unresolved" symptom may or may not reproduce the same
-     way). Test against the same two repro functions plus a handful of
-     functions from mut_verification_status.md's already-confirmed set to
-     check for silent regression on previously-good decompiles, not just
-     the two known-bad ones.
+18. table_lookup_interp parameter binding + call-site argument visibility --
+    superseded. Full investigation, fixes, and the cspec-driven far-pointer
+    call-argument fusion plan now live in review3.md.
 
-   Step 3 -- DP/EP banking (Rn_banked/Rs_banked/disp8_banked/disp16_banked
-   R0-R5 rows, 55 sites in h8539f.slaspec by this session's grep count):
-     Separate decision point, NOT automatically bundled with steps 1-2.
-     DP/EP banking is used far more pervasively than SP/FP (every general
-     register-indirect and displacement addressing mode, not just stack
-     ops), so a segmentop mistake here has a much larger blast radius across
-     the 691-function analyzed set. Do NOT start this step until steps 1-2
-     are confirmed clean AND a specific live repro of a DP/EP-banking
-     decompiler problem exists (parallel to how step 1 was blocked on
-     finding the SP repro before this session) -- unlike SP, no DP/EP
-     repro has been identified yet, so this step may end up out of scope
-     entirely if DP/EP banked accesses turn out not to exhibit the same
-     unaff_* symptom in practice. Check before assuming it needs fixing.
+19. DAT_0001f1fe status/DTC-validity flags word -- OPEN, started 2026-08-17.
+    Picked as the highest-traffic item among the 7 DAT_ globals reopened in
+    item 13 above (60+ xrefs across ~40 functions when this work began --
+    fueling, ISC, ignition, O2 sensor, EGR, knock/octane, DTC status).
 
-   Step 4 -- h8520.slaspec:
-     Item 6 above already documents the plan to unify h8520/h8538f onto the
-     shared h8539f core rather than hand-port fixes into h8520.slaspec's
-     independent copy of this same TP-banked disp8_banked/disp16_banked
-     pattern (lines 394-404 there, 4 sites, identical shape). Do not hand-
-     port segmentop into h8520.slaspec separately -- let the unification
-     effort (still gated on h8539f's own open items per item 6) carry this
-     fix over naturally once it happens, consistent with the existing
-     decision recorded there.
+    CONFIRMED (via live decompile, this session):
+    - bit0, bit1, bit2, bit3: each an independent fault/validity condition,
+      confirmed by dtc_status_flags_f204_f206_build (0x1a36f) which ORs each
+      bit directly into a local usDtcBits fault bitfield alongside IAT/
+      coolant/TPS-load-out-of-range checks and an f500==0 check, then maps
+      usDtcBits through a large set of OR conditions into the real DTC output
+      words DAT_0001f204/DAT_0001f206. Exact per-bit physical meaning (which
+      sensor/condition each of bit0-3 corresponds to) NOT YET traced back
+      further -- next step is finding what SETS each of these 4 bits.
+    - bit3 additionally gates fueling logic directly: confirmed via
+      f1fe_bit3_clear_and_f1f2_bit4_set_check (0x242c1), which returns true
+      only when f1fe bit3 is clear AND g_status_flags_f1f2 bit4 is set --
+      i.e. bit3 has at least two independent consumers (DTC builder +
+      fueling gate), not a single-purpose flag.
+    - bit5: confirmed via f1fe_bit5_clear_reset_f09a_check (0x28151), part of
+      f502_state_table_dispatch state 9 (already documented, see review8.md
+      and the H8StateTableDispatchAnalyzer batch). Returns bit5-clear as a
+      bool; when bit5 IS set, also clears DAT_0001f09a -- cooperates with
+      state 8's f1fe_f00c_timer_calc_gate_check, which only READS f09a,
+      suggesting a shared timer/counter reset handshake between these two
+      dispatch states.
+    - bit1, bit6: referenced by name only so far (f1fe_bit1_clear_check
+      @0x28192, f1fe_bit6_clear_check @0x281a6) -- not yet individually
+      decompiled/confirmed this session.
 
-   Context: item 5's "DECOMPILER OUTPUT: RESOLVED (2026-07-15)" entry refers
-   to the `<tracked_set>` block added to h8539f.cspec (TP/DP/EP/CP/BR pinned
-   to 0 via context_data), which lets Ghidra's constant-propagation fold the
-   `(zext(TP)<<16)|zext(SP)` term in SP24 down to a known value in the common
-   single-page case. That fix is real and has already resolved the specific
-   symptom seen on adc_read_sequence_b / o2_closed_loop_fuel_trim_compute
-   and others.
+    NOT YET DONE:
+    - Find the writer(s) for DAT_0001f1fe itself (get_bulk_xrefs across both
+      bank-prefix forms per this project's documented blind spot, or grep the
+      .c dump per review.md's SESSION 2026-08-07 methodology notes -- do not
+      trust get_xrefs_to alone).
+    - Decompile the remaining ~35 unchecked caller functions from the full
+      xref list (isc_stepper_enable_check, o2_upstream/downstream_enable_check,
+      egr_sequence_control, ign_advance_table_lookup, isc_integrator_update,
+      manifold_heat_enable_flag_update, map_tps_axis_update, iat_axis_update,
+      and others -- full list was captured via get_xrefs_to(0x1f1fe) this
+      session, not yet copied in here to avoid duplicating a live query;
+      re-run get_xrefs_to if this list needs regenerating).
+    - Once enough consumers are traced, name the individual bits (per-bit
+      renamed constants or a plate comment bit-map on the global itself,
+      matching the style already used for g_status_flags_f0e6 in item 1
+      above) and rename DAT_0001f1fe to a real global name.
+    - The other 6 DAT_ globals from item 13's reopen (f00e -- 9 xrefs all in
+      sci1_meta_cmd_dispatch_c0_ff; f3cc/f38c -- 18 xrefs each, both in
+      tcu_shift_torque_and_knock_mgmt/tcu_shift_timing_state_machine; f012/
+      f014 -- low traffic; 0001ef90 -- not yet checked) still need the same
+      treatment once this one is closed out.
 
-   bugs.txt raises a different, structural point worth recording rather than
-   discarding: tracked_set only fixes the common case where TP/DP/EP happen
-   to be the pinned default (0) for the page in question. Any function that
-   genuinely switches pages at runtime (ldc to TP/DP/EP, then a banked
-   access) will still hit the original symptom -- Ghidra's stack-frame
-   analyzer only recognizes the literal <stackpointer> register being
-   incremented/decremented directly, not a derived zext/shift/OR
-   recombination, tracked_set or not. Grep confirms every SP push/pop/EA
-   path (h8539f.slaspec: PUSH/POP macros, Rn_banked/Rs_banked SP alternative,
-   r0-r5/fp/sp_push/pop, eab/eaw_predec/postinc SP forms) reconstructs SP24
-   via this same inline `(zext(TP)<<16)|zext(SP)` pattern rather than a
-   `<stackpointer>`-native op Ghidra can track through a page change.
-
-   bugs.txt's suggested structural fix: replace this pattern with SLEIGH's
-   segmentop mechanism (used by Ghidra's own x86 real-mode modules for
-   DS:offset addressing) rather than manual zext/shift/OR, wiring segmentop
-   for the TP-to-24-bit-SP widening in h8539f.pspec (and, if adopted,
-   revisiting DP/EP banking on Rn_banked/disp8_banked/disp16_banked too,
-   since they follow the identical shape).
-
-   Decision (this session, UPDATED now that a repro exists): the regression
-   is confirmed real and widespread (sat_add_u16, div_u32_u16_rounded, and
-   many more across test/RVR_1998_x3 4g63t 21000011 md352553.hex.c -- see
-   REPRO CONFIRMED above), so this is no longer blocked on finding a
-   counter-example. Still NOT implementing the segmentop rewrite this
-   session -- one thing needed first:
-     - Confirmation that Ghidra's <segmentop> pspec construct is actually
-       usable for a *data* (RAM/stack) space widening here, not just the
-       code-space DS:offset case it's normally used for -- unconfirmed
-       against Ghidra 12.0.4 docs/source, not just inferred from the x86
-       module's usage. This is the one remaining gate before touching code.
-   Next step once that's confirmed: a small isolated test, segmentop on just
-   the SP24/PUSH/POP path (not DP/EP banking, which is a separate, larger
-   blast radius covering every disp8_banked/disp16_banked/Rn_banked
-   constructor) -- recompile, re-decompile sat_add_u16 specifically (cheap,
-   known-bad repro from this session), and confirm it produces a real
-   `*(undefined2 *)(SP24_expr)` shape with no unaff_SP/unaff_FP and no bare
-   (ushort) truncation before deciding whether to extend the approach to
-   DP/EP banking. Full rewrite of all zext/shift/OR banking sites stays out
-   of scope until that smaller test lands and is verified against
-   sat_add_u16 and div_u32_u16_rounded specifically, plus a handful of the
-   ~10 call sites already identified as inconsistent (21000011.hex.c:3401
-   vs :8600) to confirm the caller-side inconsistency also resolves.
-   NOTE: because tracked_set (h8539f.cspec) is the proximate cause of this
-   specific regression, reverting tracked_set is also a viable fallback if
-   segmentop turns out not to apply to the ram/stack space -- that would
-   restore the old (also-wrong, but at least consistently-shaped) ZEXT24
-   behavior while a real fix is worked out, rather than shipping the
-   current narrower/more-broken unaff_SP output. Not done this session;
-   flagging as the fallback option, not a recommendation to revert yet.
-
---------
-
-Build/test workflow (Sleigh compile + deploy) -- reference, add once, stop asking
+----------------------------------------------------------------------------------
+Build/test workflow
 ----------------------------------------------------------------------------------
 Use this every time a .sinc/.slaspec grammar change needs compiling and
 testing against the live ROM. No need to re-ask for these paths again.
@@ -866,12 +695,186 @@ Steps:
    Sanity check after copying (both listings should show matching timestamps for
    every h8539f* file): Get-ChildItem "$src" | Select Name,LastWriteTime
    and the same command against $dst.
-4. Test in the Ghidra project as normal (reanalyze / re-open the program to pick up
-   the new .sla). NOTE: an already-open program can cache old instruction-level
-   pcode even after reanalyze/close+reopen/delete+recreate-function -- if a source
-   change still doesn't show up in decompile output after confirming the install
-   directory has fresh files, importing into a fresh project is the reliable way
-   to confirm the fix, since a new project reads the language definition cold.
-5. Safety net: if a bad compile or bad copy breaks the installed language, just
-   delete the .sla in the Ghidra install languages folder above -- Ghidra
-   regenerates it from the baseline/source shipped there. Nothing is unrecoverable.
+4. run the script  ReloadSleighLanguage.java in Ghidra to refresh the open project with the new sleigh files.
+5. Test in the Ghidra project as normal
+
+CAVEAT ADDED 2026-08-02: steps 1-4 above only reload .sla/.pspec/.sinc content.
+.cspec is loaded once per Ghidra session/project and is NOT hot-swapped by
+ReloadSleighLanguage.java -- confirmed by direct test (see item 18 continuation
+below): a full compile+copy+reload cycle produced a byte-identical decompile
+until Ghidra itself was actually closed and reopened. If a change touches
+.cspec (tracked_set defaults, calling conventions, pentry storage), a full
+Ghidra restart is required before testing, not just steps 2-4.
+
+18 (continuation) -- superseded. The EP-input SEGMENTOP limitation, the
+table_lookup_interp/table_lookup_indexed/table_3axis_interp_triple
+param-storage fixes, and the #817-style far-pointer/call-site annotation
+work are now tracked in review3.md (cspec-driven far-pointer call-argument
+fusion plan).
+
+SESSION 2026-08-07: MUT DISPATCH/PACK-AND-SEND TRACE, METHODOLOGY
+CORRECTIONS, AND A BETTER VERIFICATION TOOL
+============================================================
+Long session continuing from "trace where the ECU packs and sends MUT
+IDs." Full detail lives in mut_verification_status.md; this entry
+summarizes the METHODOLOGY findings specifically, since they apply to
+all future sessions/tools, not just this one topic.
+
+WHAT WAS TRACED (see mut_verification_status.md for full detail):
+- sci1_periodic_status_frame_build_f54a_f566 (renamed from
+  diagnostic_snapshot_f54a_f566_build): the periodic (every-200-tick)
+  SCI1 status/handshake frame builder. All 14 fields traced to a source;
+  3 confirmed as real known values (engine_torque_pct_f17a,
+  mut_battery_voltage_f13a, coolant_temp_scaled_f130), 2 traced but
+  unnamed (F18C injector-PW sibling, F10E table/axis output), 3
+  (F552/F554/F55A) traced to a shared muldiv_s16_rounded_3op() call whose
+  inputs are a 100-tick snapshot-and-reset of an accumulator
+  (accum_latch_100tick_f33a/f33c, renamed) inside
+  fuel_pw_and_airvol_compute -- exact physical meaning of THAT
+  accumulator not pinned down.
+- Separately traced the ACTUAL Mode-2 MUT RequestID path
+  (adc_sensor_convert_single, the 0x2fad0 table reader): found it has
+  exactly 2 callers, both internal periodic snapshot/backup-logging
+  functions (renamed mut_configurable_reqid_backup_snapshot_5word /
+  _periodic_snapshot_8word), which pull their RequestID list from a
+  RAM record fed by a boot-time ROM copy that turned out to be all-0xFF
+  (unprogrammed) on this ROM. Traced who else could populate that record
+  at runtime (eeprom_backup_table_write_dispatch, called every main_loop
+  pass) and searched exhaustively for an EEPROM/serial driver -- found
+  none. Working conclusion (per user's steer): this ECU likely has no
+  onboard EEPROM, the whole mechanism is vestigial/inherited from a
+  shared platform codebase, never populated on real hardware. CONCLUSION:
+  there is no live, wire-driven "answer any RequestID you're asked for"
+  handler on this ROM -- the sub-0xC0 command table @0x1fad0 that would
+  normally hold one is entirely unprogrammed (separate, earlier finding).
+- Used the above work as a base to confirm 6 MUT table RequestIDs as
+  genuinely dead/unimplemented cells: 0x18 F21D, 0x19 F217, 0x20 F179,
+  0x2E F1E7, 0x44 EEDF (MAT Scaled), 0x45 EEE1 (MAP Scaled).
+
+METHODOLOGY LESSONS (the important part for future sessions/tools):
+
+1. get_xrefs_to / get_bulk_xrefs must be checked under BOTH the 0000-
+   and 0001-address-bank-prefix forms of an address before concluding no
+   writer exists. This bit twice this session: F17A and F33A/F33C both
+   showed "zero xrefs" under one prefix but had real writers findable
+   under the other. Root cause: this ROM's H8/500 code accesses the same
+   physical RAM cell under different bank-tag prefixes depending on
+   which bank was active at the access site (same idiom as the
+   `bVar<<0x10 | 0xfxxx` pattern already documented elsewhere in this
+   project) -- Ghidra's xref index appears to track these separately
+   rather than unifying them to one physical address.
+
+2. search_byte_patterns on a raw 2-byte address literal is UNRELIABLE
+   used alone -- H8/500 instructions are variable-length and a 2-byte
+   substring can coincidentally appear inside a completely unrelated
+   instruction's encoding (demonstrated concretely with F21D: a
+   byte-pattern hit at 0x2be19 looked like a real reference but
+   get_assembly_context proved it wasn't even an instruction boundary --
+   it was a byte-offset overlap inside a different instruction targeting
+   a different address entirely, F71C). MANDATORY: verify every
+   byte-pattern hit with get_assembly_context (or equivalent) to confirm
+   it lands on a genuine instruction boundary referencing the intended
+   address, before treating it as a real reference either way (a hit
+   OR a non-hit both need this check -- a real hit could also coincide
+   with data/table regions that aren't code references, as seen with the
+   EEDF/EEE1/F217/F179/F1E7 table-entry hits, which were real matches
+   but were table DATA, not code writers).
+
+3. BEST METHOD FOUND THIS SESSION, should be the PRIMARY method going
+   forward: the project has a full decompiled-C dump of the entire ROM
+   at test/rvr/RVR_1998_x3 4g63t 21000011 md352553.hex.c (28,456 lines,
+   confirmed current -- reflects today's Ghidra renames already). Grep
+   this file directly for a target symbol/address FIRST. It is immune to
+   BOTH failure modes above simultaneously: it's flat decompiled text
+   (no bank-prefix split, so can't miss a writer the way get_xrefs_to
+   did), and it matches on actual decompiled address/symbol text rather
+   than raw instruction-encoding bytes (so can't produce the
+   coincidental-byte-overlap false positives search_byte_patterns did).
+   Verified by grepping "f17a" and finding the exact known-good writer
+   line in plain text (`*(undefined2 *)((uint)bVar2 << 0x10 | 0xf17a) =
+   uVar1;`). Re-ran all 6 "confirmed dead" cells through this file as a
+   third independent check -- all came back 0 matches, giving much
+   higher confidence than either of the other two methods alone.
+   RECOMMENDATION: for any future "does X have a writer / who references
+   Y" question in this project, grep the .c dump first; use
+   get_xrefs_to second (checking both bank prefixes) to jump from a hit's
+   line number to the live Ghidra function name/address; reserve
+   search_byte_patterns for cases where the .c dump doesn't exist yet or
+   needs regenerating, and always verify its hits against instruction
+   boundaries before trusting them.
+
+4. Général process note: several conclusions this session were stated
+   too confidently on a first pass and had to be walked back after
+   direct pushback/re-checking (the "fixed literal RequestID" claim, the
+   "dead end" framing on the EEPROM mechanism, the F21D byte-pattern
+   dismissal). Worth building in the habit of treating a first
+   xref/byte-pattern search as provisional, especially when it produces
+   a clean "definitely nothing here" result, rather than writing it up
+   as final until cross-checked by a second, structurally different
+   method (per point 3 above, that second method should now be the .c
+   dump grep by default).
+
+SCRIPT ADDED 2026-08-07: FindRealWritersAcrossBankForms.java
+============================================================
+Saved in "ghidra scripts/FindRealWritersAcrossBankForms.java" (copy into
+Ghidra's own ghidra_scripts search path before running, per the existing
+documented gotcha for all scripts in this project).
+
+WHY: get_xrefs_to was confirmed this session to have a real, reproducible
+blind spot -- it indexes references per literal address-space-prefix
+string ("0000fXXX" vs "0001fXXX") and does NOT unify them even when they
+are the same physical RAM byte. Verified directly: get_xrefs_to(0001f130)
+returns 17 correct references; get_xrefs_to(0000f130) returns ZERO for
+the exact same physical cell, in the same session, immediately after.
+"Check both prefixes" (the mid-session workaround) is a partial
+mitigation, not a fix -- it still misses any write using a THIRD
+addressing form, e.g. a runtime-computed bank-relative store like
+(uint)bVar<<0x10 | 0xfXXX, which is exactly how F17A's and F33A/F33C's
+real writers were built (found only by decompiling/disassembling
+candidate functions directly, not via get_xrefs_to under either prefix).
+
+WHAT IT DOES: single pass over every instruction in the program.
+  - Pass 1 (MEM-REF, high confidence): checks every instruction's already-
+    resolved memory references, normalizes the target address to its bare
+    16-bit RAM offset (strips the bank-prefix distinction Ghidra's live
+    xref index fails to unify), and reports a hit if it matches a target.
+    This alone reproduces everything get_xrefs_to would find under BOTH
+    prefixes, in one query.
+  - Pass 2 (IMM-ONLY, lower confidence, needs manual review): separately
+    scans every instruction's operands for the bare 16-bit target value
+    appearing as a plain scalar immediate, REGARDLESS of whether Ghidra
+    recognized it as a memory reference. This is the pass that would have
+    caught F17A/F33A/F33C without prior knowledge of where to look --
+    those writers use a computed-bank store where the low 16 bits still
+    appear as a literal, just not as something Ghidra's operand analysis
+    resolved into a formal Reference.
+  - Does NOT auto-classify Pass 2 hits as real -- deliberately, per the
+    F21D false-positive already found this session (a byte-pattern match
+    that turned out to be a coincidental sub-instruction byte overlap,
+    not a real reference). Every Pass 2 hit needs a human to confirm it's
+    a genuine address-forming immediate and not a coincidental literal
+    (loop bound, unrelated constant, etc.) before treating it as a real
+    writer.
+  - Optional CONFIRM_AND_ANNOTATE list: once a hit is manually confirmed,
+    add it there and re-run to have the script create a real Ghidra
+    memory reference, so future get_xrefs_to queries (under either
+    prefix) will find it going forward -- closes the gap for that
+    specific cell permanently rather than needing this script re-run
+    every time.
+
+NOT YET RUN this session -- written and reviewed but not executed inside
+Ghidra (requires copying into ghidra_scripts path and running via the
+GUI or a script-runner tool, not yet done). Default TARGET_OFFSETS list
+is pre-loaded with the 6 cells this session called "confirmed dead"
+(f21d, f217, f179, f1e7, eedf, eee1) specifically so running it is the
+natural next step to re-verify those conclusions with a method immune to
+both known blind spots at once (the prefix-index bug AND the byte-
+pattern-false-positive risk), especially given the EvoScan log
+contradiction found the same session (real live MATScaled/MAPScaled data
+existing despite "no writer found" for EEDF/EEE1).
+
+NOT YET DONE: actually run this script in Ghidra and reconcile its
+output against both the .c dump grep results (which agreed "0 matches"
+for all 6 targets, but is ALSO potentially blind to computed-bank-store
+writers if the decompiler folds them into a form that doesn't textually
+contain the literal) and the EvoScan log question.

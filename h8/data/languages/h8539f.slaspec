@@ -20,6 +20,23 @@ define space register type=register_space size=1;
 
 # --- General purpose registers (2 bytes each, offsets 0x00-0x0F) ---
 define register offset=0x00 size=2 [ R0 R1 R2 R3 R4 R5 FP SP ];
+# R0R1: REVERTED 2026-07-22 (same-day follow-up). Confirmed via a genuine full
+# Ghidra restart + fresh ROM reopen (not a stale-reload artifact) that this
+# "just another register" approach does NOT avoid the pollution it was meant
+# to fix: isr_sci1_eri (0x15caa, no call relationship to any R0:R1 math
+# helper) still shows "Unable to track spacebase fully for stack" after a
+# cold restart, and muldiv_u16_scaled still shows "Restarted to delay
+# deadcode elimination for space: register" plus messy stack0xfffe casts,
+# byte-for-byte identical before and after the restart and before and after
+# an explicit set_function_prototype re-application. So a real overlapping
+# register in the register space can still perturb the decompiler's global
+# return-value/stack-tracking model just by existing, not just via the
+# join+solo-pentry construct originally blamed. Falling back to plain ushort
+# on the affected 6 math helpers (see h8539f.cspec) -- accepts the known
+# dropped-R1-half warning on just those 6 functions, which is a smaller,
+# already-understood, and non-spreading problem. Backup of the R0R1 state
+# (files as of this session) is in backup_20260722_pre_r0r1_revert/ if this
+# needs re-diagnosing later.
 # --- Control/segment registers (1 byte each, offsets 0x10-0x17) ---
 # TP is at 0x13 (matches old size=1 row index 19 -> byte 19 = 0x13)
 define register offset=0x10 size=1 [ CP DP EP TP BR _ _ _ ];
@@ -78,8 +95,10 @@ define token addrMode(8)
 	sz = (3, 3)
 	mode = (4, 7)
 ;
+
 define token instr8(8)
 	Rd = (0,2)
+	RdN = (0,2)
 	Rdb = (0,2)
 	Rs = (0,2)
 	Rsb = (0,2)
@@ -157,6 +176,7 @@ attach variables [ m5CR ] [ _ CCR _ BR EP DP _ TP ];
 
 
 attach variables [ Rd Rs Rn ]    [ R0  R1  R2  R3  R4  R5  FP  SP  ];
+attach variables [ RdN ]           [ R1  R2  R3  R4  R5  FP  SP  _   ];
 #attach variables [ Rdb Rsb Rnb ] [ R0L R1L R2L R3L R4L R5L FPL SPL ];
 #attach names [ targetReg ] [ R0  R1  R2  R3  R4  R5  FP  SP  ];
 
@@ -171,8 +191,8 @@ define token addrByte(8)    addr8  = (0, 7);
 define token addrWord(16)   addr16 = (0, 15);
 define token addrLong(24)   addr24 = (0, 23);
 define token pageByte(8)    page   = (0, 7);
-define token dispByte(8)    disp8  = (0,7)  signed;
-define token dispWord(16)   disp16 = (0,15) signed;
+define token dispByte(8)    disp8  = (0,7)  signed  disp8sg = (7,7);
+define token dispWord(16)   disp16 = (0,15) signed  disp16sg = (15,15);
 define token immByte(8)     imm8   = (0,7);
 define token immWord(16)    imm16  = (0,15);
 define token regListByte(8)
@@ -416,6 +436,18 @@ macro bankify(addr, reg) {
 	addr = add24;
 }
 
+macro bankifyDP(result, reg) {
+	# Reuses the spSegment segmentop pcodeop (h8539f.pspec <segmentop space="ram"
+	# userop="spSegment">) instead of manually inlining (zext(DP)<<16)|zext(reg).
+	# Same fix pattern as EP (review.md item 9, step 3b): DP is not added to
+	# <constresolve> (TP already holds that one slot Ghidra allows per address
+	# space), so this does not constant-fold DP=0/1 the way the old inline zext
+	# pattern did -- but it is a REAL segmented pointer, not an opaque CALLOTHER,
+	# and critically it stops decompiling as CONCAT12(DP,reg) at every callsite,
+	# since spSegment is a pcodeop/segmentop, not inlined zext/shift/OR pcode.
+	result = spSegment(DP, reg);
+}
+
 macro bankify_dp(addr) {
 	dp32:4 = zext(DP);
 	add32:4 = zext(addr);
@@ -525,41 +557,41 @@ addr16_dp:        addr16             is addr16 { local addr:4 = (zext(DP) << 16)
 
 
 
-disp8_banked:     disp8              is disp8  & targetBase=0 { local addrLo:2 = (R0 + disp8); local addr:4 = (zext(DP) << 16) | zext(addrLo);  export addr; }
-disp8_banked:     disp8              is disp8  & targetBase=1 { local addrLo:2 = (R1 + disp8); local addr:4 = (zext(DP) << 16) | zext(addrLo);  export addr; }
-disp8_banked:     disp8              is disp8  & targetBase=2 { local addrLo:2 = (R2 + disp8); local addr:4 = (zext(DP) << 16) | zext(addrLo);  export addr; }
-disp8_banked:     disp8              is disp8  & targetBase=3 { local addrLo:2 = (R3 + disp8); local addr:4 = (zext(DP) << 16) | zext(addrLo);  export addr; }
-disp8_banked:     disp8              is disp8  & targetBase=4 { local addrLo:2 = (R4 + disp8); local addr:4 = (zext(EP) << 16) | zext(addrLo);  export addr; }
-disp8_banked:     disp8              is disp8  & targetBase=5 { local addrLo:2 = (R5 + disp8); local addr:4 = (zext(EP) << 16) | zext(addrLo);  export addr; }
+disp8_banked:     disp8              is disp8  & targetBase=0 { local addrLo:2 = (R0 + disp8); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp8_banked:     disp8              is disp8  & targetBase=1 { local addrLo:2 = (R1 + disp8); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp8_banked:     disp8              is disp8  & targetBase=2 { local addrLo:2 = (R2 + disp8); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp8_banked:     disp8              is disp8  & targetBase=3 { local addrLo:2 = (R3 + disp8); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp8_banked:     disp8              is disp8  & targetBase=4 { local addrLo:2 = (R4 + disp8); local addr:4 = spSegment(EP, addrLo);  export addr; }
+disp8_banked:     disp8              is disp8  & targetBase=5 { local addrLo:2 = (R5 + disp8); local addr:4 = spSegment(EP, addrLo);  export addr; }
 disp8_banked:     disp8              is disp8  & targetBase=6 { local addrLo:2 = (FP + disp8); local addr:4 = (zext(TP) << 16) | zext(addrLo);  export addr; }
 disp8_banked:     disp8              is disp8  & targetBase=7 { local addrLo:2 = (SP + disp8); local addr:4 = (zext(TP) << 16) | zext(addrLo);  export addr; }
 
-disp16_banked:    disp16             is disp16 & targetBase=0 { local addrLo:2 = (R0 + disp16); local addr:4 = (zext(DP) << 16) | zext(addrLo);  export addr; }
-disp16_banked:    disp16             is disp16 & targetBase=1 { local addrLo:2 = (R1 + disp16); local addr:4 = (zext(DP) << 16) | zext(addrLo);  export addr; }
-disp16_banked:    disp16             is disp16 & targetBase=2 { local addrLo:2 = (R2 + disp16); local addr:4 = (zext(DP) << 16) | zext(addrLo);  export addr; }
-disp16_banked:    disp16             is disp16 & targetBase=3 { local addrLo:2 = (R3 + disp16); local addr:4 = (zext(DP) << 16) | zext(addrLo);  export addr; }
-disp16_banked:    disp16             is disp16 & targetBase=4 { local addrLo:2 = (R4 + disp16); local addr:4 = (zext(EP) << 16) | zext(addrLo);  export addr; }
-disp16_banked:    disp16             is disp16 & targetBase=5 { local addrLo:2 = (R5 + disp16); local addr:4 = (zext(EP) << 16) | zext(addrLo);  export addr; }
+disp16_banked:    disp16             is disp16 & targetBase=0 { local addrLo:2 = (R0 + disp16); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp16_banked:    disp16             is disp16 & targetBase=1 { local addrLo:2 = (R1 + disp16); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp16_banked:    disp16             is disp16 & targetBase=2 { local addrLo:2 = (R2 + disp16); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp16_banked:    disp16             is disp16 & targetBase=3 { local addrLo:2 = (R3 + disp16); local addr:4; bankifyDP(addr, addrLo); export addr; }
+disp16_banked:    disp16             is disp16 & targetBase=4 { local addrLo:2 = (R4 + disp16); local addr:4 = spSegment(EP, addrLo);  export addr; }
+disp16_banked:    disp16             is disp16 & targetBase=5 { local addrLo:2 = (R5 + disp16); local addr:4 = spSegment(EP, addrLo);  export addr; }
 disp16_banked:    disp16             is disp16 & targetBase=6 { local addrLo:2 = (FP + disp16); local addr:4 = (zext(TP) << 16) | zext(addrLo);  export addr; }
 disp16_banked:    disp16             is disp16 & targetBase=7 { local addrLo:2 = (SP + disp16); local addr:4 = (zext(TP) << 16) | zext(addrLo);  export addr; }
 
 #Rn_banked:        Rn                 is Rn { local addr:4 = zext(Rn); bankify(addr, (&:1 Rn) >> 1); export addr; }
-Rn_banked:       "R0"              is Rn=0 { local addr:4 = (zext(DP) << 16) | zext(R0); export addr; }
-Rn_banked:       "R1"              is Rn=1 { local addr:4 = (zext(DP) << 16) | zext(R1); export addr; }
-Rn_banked:       "R2"              is Rn=2 { local addr:4 = (zext(DP) << 16) | zext(R2); export addr; }
-Rn_banked:       "R3"              is Rn=3 { local addr:4 = (zext(DP) << 16) | zext(R3); export addr; }
-Rn_banked:       "R4"              is Rn=4 { local addr:4 = (zext(EP) << 16) | zext(R4); export addr; }
-Rn_banked:       "R5"              is Rn=5 { local addr:4 = (zext(EP) << 16) | zext(R5); export addr; }
+Rn_banked:       "R0"              is Rn=0 { local addr:4; bankifyDP(addr, R0); export addr; }
+Rn_banked:       "R1"              is Rn=1 { local addr:4; bankifyDP(addr, R1); export addr; }
+Rn_banked:       "R2"              is Rn=2 { local addr:4; bankifyDP(addr, R2); export addr; }
+Rn_banked:       "R3"              is Rn=3 { local addr:4; bankifyDP(addr, R3); export addr; }
+Rn_banked:       "R4"              is Rn=4 { local ptr24:4 = spSegment(EP, R4); export ptr24; }
+Rn_banked:       "R5"              is Rn=5 { local ptr24:4 = spSegment(EP, R5); export ptr24; }
 Rn_banked:       "FP"              is Rn=6 { local ptr24:4 = spSegment(TP, FP); export ptr24; }
 Rn_banked:       "SP"              is Rn=7 { local ptr24:4 = spSegment(TP, SP); export ptr24; }
 
 
-Rs_banked:       "R0"              is Rs=0 { local addr:4 = (zext(DP) << 16) | zext(R0); export addr; }
-Rs_banked:       "R1"              is Rs=1 { local addr:4 = (zext(DP) << 16) | zext(R1); export addr; }
-Rs_banked:       "R2"              is Rs=2 { local addr:4 = (zext(DP) << 16) | zext(R2); export addr; }
-Rs_banked:       "R3"              is Rs=3 { local addr:4 = (zext(DP) << 16) | zext(R3); export addr; }
-Rs_banked:       "R4"              is Rs=4 { local addr:4 = (zext(EP) << 16) | zext(R4); export addr; }
-Rs_banked:       "R5"              is Rs=5 { local addr:4 = (zext(EP) << 16) | zext(R5); export addr; }
+Rs_banked:       "R0"              is Rs=0 { local addr:4; bankifyDP(addr, R0); export addr; }
+Rs_banked:       "R1"              is Rs=1 { local addr:4; bankifyDP(addr, R1); export addr; }
+Rs_banked:       "R2"              is Rs=2 { local addr:4; bankifyDP(addr, R2); export addr; }
+Rs_banked:       "R3"              is Rs=3 { local addr:4; bankifyDP(addr, R3); export addr; }
+Rs_banked:       "R4"              is Rs=4 { local ptr24:4 = spSegment(EP, R4); export ptr24; }
+Rs_banked:       "R5"              is Rs=5 { local ptr24:4 = spSegment(EP, R5); export ptr24; }
 Rs_banked:       "FP"              is Rs=6 { local ptr24:4 = spSegment(TP, FP); export ptr24; }
 Rs_banked:       "SP"              is Rs=7 { local ptr24:4 = spSegment(TP, SP); export ptr24; }
 
@@ -600,10 +632,65 @@ eab_direct:       Rn                        is Rn & mode = 10 & sz = 0          
 eaw_direct:       Rn                        is Rn & mode = 10 & sz = 1            { export Rn; }
 eab_indirect:     "@"^Rn_banked             is Rn_banked & mode = 13 & sz = 0     { export *:1 Rn_banked; }
 eaw_indirect:     "@"^Rn_banked             is Rn_banked & mode = 13 & sz = 1     { export *:2 Rn_banked; }
-eab_disp8:        "@("^disp8^":8,"^Rn_banked^")"   is Rn_banked & mode = 14 & sz = 0; disp8     { tmp = (Rn_banked + disp8);  export *:1 tmp; }
-eaw_disp8:        "@("^disp8^":8,"^Rn_banked^")"   is Rn_banked & mode = 14 & sz = 1; disp8     { tmp = (Rn_banked + disp8);  export *:2 tmp; }
-eab_disp16:       "@("^disp16^":16,"^Rn_banked^")" is Rn_banked & mode = 15 & sz = 0; disp16    { tmp = (Rn_banked + disp16); export *:1 tmp; }
-eaw_disp16:       "@("^disp16^":16,"^Rn_banked^")" is Rn_banked & mode = 15 & sz = 1; disp16    { tmp = (Rn_banked + disp16); export *:2 tmp; }
+eab_disp8:        "@("^disp8^":8,R0)" is Rn = 0 & mode = 14 & sz = 0; disp8 & disp8sg = 0 { local a:4 = spSegment(DP, R0) + disp8; export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R0)" is Rn = 0 & mode = 14 & sz = 0; disp8 & disp8sg = 1 { local off:2 = R0 + disp8; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R1)" is Rn = 1 & mode = 14 & sz = 0; disp8 & disp8sg = 0 { local a:4 = spSegment(DP, R1) + disp8; export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R1)" is Rn = 1 & mode = 14 & sz = 0; disp8 & disp8sg = 1 { local off:2 = R1 + disp8; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R2)" is Rn = 2 & mode = 14 & sz = 0; disp8 & disp8sg = 0 { local a:4 = spSegment(DP, R2) + disp8; export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R2)" is Rn = 2 & mode = 14 & sz = 0; disp8 & disp8sg = 1 { local off:2 = R2 + disp8; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R3)" is Rn = 3 & mode = 14 & sz = 0; disp8 & disp8sg = 0 { local a:4 = spSegment(DP, R3) + disp8; export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R3)" is Rn = 3 & mode = 14 & sz = 0; disp8 & disp8sg = 1 { local off:2 = R3 + disp8; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R4)" is Rn = 4 & mode = 14 & sz = 0; disp8 & disp8sg = 0 { local a:4 = spSegment(EP, R4) + disp8; export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R4)" is Rn = 4 & mode = 14 & sz = 0; disp8 & disp8sg = 1 { local off:2 = R4 + disp8; local a:4 = spSegment(EP, off); export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R5)" is Rn = 5 & mode = 14 & sz = 0; disp8 & disp8sg = 0 { local a:4 = spSegment(EP, R5) + disp8; export *:1 a; }
+eab_disp8:        "@("^disp8^":8,R5)" is Rn = 5 & mode = 14 & sz = 0; disp8 & disp8sg = 1 { local off:2 = R5 + disp8; local a:4 = spSegment(EP, off); export *:1 a; }
+eaw_disp8:        "@("^disp8^":8,R0)" is Rn = 0 & mode = 14 & sz = 1; disp8 & disp8sg = 0 { local a:4 = spSegment(DP, R0) + disp8; export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R0)" is Rn = 0 & mode = 14 & sz = 1; disp8 & disp8sg = 1 { local off:2 = R0 + disp8; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R1)" is Rn = 1 & mode = 14 & sz = 1; disp8 & disp8sg = 0 { local a:4 = spSegment(DP, R1) + disp8; export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R1)" is Rn = 1 & mode = 14 & sz = 1; disp8 & disp8sg = 1 { local off:2 = R1 + disp8; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R2)" is Rn = 2 & mode = 14 & sz = 1; disp8 & disp8sg = 0 { local a:4 = spSegment(DP, R2) + disp8; export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R2)" is Rn = 2 & mode = 14 & sz = 1; disp8 & disp8sg = 1 { local off:2 = R2 + disp8; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R3)" is Rn = 3 & mode = 14 & sz = 1; disp8 & disp8sg = 0 { local a:4 = spSegment(DP, R3) + disp8; export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R3)" is Rn = 3 & mode = 14 & sz = 1; disp8 & disp8sg = 1 { local off:2 = R3 + disp8; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R4)" is Rn = 4 & mode = 14 & sz = 1; disp8 & disp8sg = 0 { local a:4 = spSegment(EP, R4) + disp8; export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R4)" is Rn = 4 & mode = 14 & sz = 1; disp8 & disp8sg = 1 { local off:2 = R4 + disp8; local a:4 = spSegment(EP, off); export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R5)" is Rn = 5 & mode = 14 & sz = 1; disp8 & disp8sg = 0 { local a:4 = spSegment(EP, R5) + disp8; export *:2 a; }
+eaw_disp8:        "@("^disp8^":8,R5)" is Rn = 5 & mode = 14 & sz = 1; disp8 & disp8sg = 1 { local off:2 = R5 + disp8; local a:4 = spSegment(EP, off); export *:2 a; }
+eab_disp16:       "@("^disp16^":16,R0)" is Rn = 0 & mode = 15 & sz = 0; disp16 & disp16sg = 0 { local a:4 = spSegment(DP, R0) + disp16; export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R0)" is Rn = 0 & mode = 15 & sz = 0; disp16 & disp16sg = 1 { local off:2 = R0 + disp16; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R1)" is Rn = 1 & mode = 15 & sz = 0; disp16 & disp16sg = 0 { local a:4 = spSegment(DP, R1) + disp16; export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R1)" is Rn = 1 & mode = 15 & sz = 0; disp16 & disp16sg = 1 { local off:2 = R1 + disp16; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R2)" is Rn = 2 & mode = 15 & sz = 0; disp16 & disp16sg = 0 { local a:4 = spSegment(DP, R2) + disp16; export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R2)" is Rn = 2 & mode = 15 & sz = 0; disp16 & disp16sg = 1 { local off:2 = R2 + disp16; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R3)" is Rn = 3 & mode = 15 & sz = 0; disp16 & disp16sg = 0 { local a:4 = spSegment(DP, R3) + disp16; export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R3)" is Rn = 3 & mode = 15 & sz = 0; disp16 & disp16sg = 1 { local off:2 = R3 + disp16; local a:4 = spSegment(DP, off); export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R4)" is Rn = 4 & mode = 15 & sz = 0; disp16 & disp16sg = 0 { local a:4 = spSegment(EP, R4) + disp16; export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R4)" is Rn = 4 & mode = 15 & sz = 0; disp16 & disp16sg = 1 { local off:2 = R4 + disp16; local a:4 = spSegment(EP, off); export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R5)" is Rn = 5 & mode = 15 & sz = 0; disp16 & disp16sg = 0 { local a:4 = spSegment(EP, R5) + disp16; export *:1 a; }
+eab_disp16:       "@("^disp16^":16,R5)" is Rn = 5 & mode = 15 & sz = 0; disp16 & disp16sg = 1 { local off:2 = R5 + disp16; local a:4 = spSegment(EP, off); export *:1 a; }
+eaw_disp16:       "@("^disp16^":16,R0)" is Rn = 0 & mode = 15 & sz = 1; disp16 & disp16sg = 0 { local a:4 = spSegment(DP, R0) + disp16; export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R0)" is Rn = 0 & mode = 15 & sz = 1; disp16 & disp16sg = 1 { local off:2 = R0 + disp16; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R1)" is Rn = 1 & mode = 15 & sz = 1; disp16 & disp16sg = 0 { local a:4 = spSegment(DP, R1) + disp16; export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R1)" is Rn = 1 & mode = 15 & sz = 1; disp16 & disp16sg = 1 { local off:2 = R1 + disp16; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R2)" is Rn = 2 & mode = 15 & sz = 1; disp16 & disp16sg = 0 { local a:4 = spSegment(DP, R2) + disp16; export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R2)" is Rn = 2 & mode = 15 & sz = 1; disp16 & disp16sg = 1 { local off:2 = R2 + disp16; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R3)" is Rn = 3 & mode = 15 & sz = 1; disp16 & disp16sg = 0 { local a:4 = spSegment(DP, R3) + disp16; export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R3)" is Rn = 3 & mode = 15 & sz = 1; disp16 & disp16sg = 1 { local off:2 = R3 + disp16; local a:4 = spSegment(DP, off); export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R4)" is Rn = 4 & mode = 15 & sz = 1; disp16 & disp16sg = 0 { local a:4 = spSegment(EP, R4) + disp16; export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R4)" is Rn = 4 & mode = 15 & sz = 1; disp16 & disp16sg = 1 { local off:2 = R4 + disp16; local a:4 = spSegment(EP, off); export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R5)" is Rn = 5 & mode = 15 & sz = 1; disp16 & disp16sg = 0 { local a:4 = spSegment(EP, R5) + disp16; export *:2 a; }
+eaw_disp16:       "@("^disp16^":16,R5)" is Rn = 5 & mode = 15 & sz = 1; disp16 & disp16sg = 1 { local off:2 = R5 + disp16; local a:4 = spSegment(EP, off); export *:2 a; }
+# FP/SP displacement operands: add the displacement to the 16-bit offset BEFORE applying the segment (matches disp8_banked above),
+# so the decompiler sees SEGMENTOP(TP, FP+disp) rather than SEGMENTOP(TP, FP) + disp.
+eab_disp8: "@("^disp8^":8,FP)" is Rn = 6 & mode = 14 & sz = 0; disp8 { local off:2 = FP + disp8; local a:4 = spSegment(TP, off); export *:1 a; }
+eaw_disp8: "@("^disp8^":8,FP)" is Rn = 6 & mode = 14 & sz = 1; disp8 { local off:2 = FP + disp8; local a:4 = spSegment(TP, off); export *:2 a; }
+eab_disp16: "@("^disp16^":16,FP)" is Rn = 6 & mode = 15 & sz = 0; disp16 { local off:2 = FP + disp16; local a:4 = spSegment(TP, off); export *:1 a; }
+eaw_disp16: "@("^disp16^":16,FP)" is Rn = 6 & mode = 15 & sz = 1; disp16 { local off:2 = FP + disp16; local a:4 = spSegment(TP, off); export *:2 a; }
+eab_disp8: "@("^disp8^":8,SP)" is Rn = 7 & mode = 14 & sz = 0; disp8 { local off:2 = SP + disp8; local a:4 = spSegment(TP, off); export *:1 a; }
+eaw_disp8: "@("^disp8^":8,SP)" is Rn = 7 & mode = 14 & sz = 1; disp8 { local off:2 = SP + disp8; local a:4 = spSegment(TP, off); export *:2 a; }
+eab_disp16: "@("^disp16^":16,SP)" is Rn = 7 & mode = 15 & sz = 0; disp16 { local off:2 = SP + disp16; local a:4 = spSegment(TP, off); export *:1 a; }
+eaw_disp16: "@("^disp16^":16,SP)" is Rn = 7 & mode = 15 & sz = 1; disp16 { local off:2 = SP + disp16; local a:4 = spSegment(TP, off); export *:2 a; }
+
 # ---------------------------------------------------------------------------
 # predec/postinc (mode=11/12), all 8 registers (BUG: collision+mutation fix).
 # ana.cpp's phrase() does `code & 7` uniformly -- there is no separate SP path
@@ -624,39 +711,39 @@ eaw_disp16:       "@("^disp16^":16,"^Rn_banked^")" is Rn_banked & mode = 15 & sz
 # lets Ghidra's stack-frame analyzer recognize it as the real stack pointer
 # (see h8539f.cspec's <stackpointer> and review.md item 8's Z180 precedent).
 # ---------------------------------------------------------------------------
-eab_predec:       "@-R0"    is Rn=0 & mode = 11 & sz = 0 { R0 = R0 - 1; local addr:4 = (zext(DP) << 16) | zext(R0); export *:1 addr; }
-eab_predec:       "@-R1"    is Rn=1 & mode = 11 & sz = 0 { R1 = R1 - 1; local addr:4 = (zext(DP) << 16) | zext(R1); export *:1 addr; }
-eab_predec:       "@-R2"    is Rn=2 & mode = 11 & sz = 0 { R2 = R2 - 1; local addr:4 = (zext(DP) << 16) | zext(R2); export *:1 addr; }
-eab_predec:       "@-R3"    is Rn=3 & mode = 11 & sz = 0 { R3 = R3 - 1; local addr:4 = (zext(DP) << 16) | zext(R3); export *:1 addr; }
-eab_predec:       "@-R4"    is Rn=4 & mode = 11 & sz = 0 { R4 = R4 - 1; local addr:4 = (zext(EP) << 16) | zext(R4); export *:1 addr; }
-eab_predec:       "@-R5"    is Rn=5 & mode = 11 & sz = 0 { R5 = R5 - 1; local addr:4 = (zext(EP) << 16) | zext(R5); export *:1 addr; }
+eab_predec:       "@-R0"    is Rn=0 & mode = 11 & sz = 0 { R0 = R0 - 1; local addr:4; bankifyDP(addr, R0); export *:1 addr; }
+eab_predec:       "@-R1"    is Rn=1 & mode = 11 & sz = 0 { R1 = R1 - 1; local addr:4; bankifyDP(addr, R1); export *:1 addr; }
+eab_predec:       "@-R2"    is Rn=2 & mode = 11 & sz = 0 { R2 = R2 - 1; local addr:4; bankifyDP(addr, R2); export *:1 addr; }
+eab_predec:       "@-R3"    is Rn=3 & mode = 11 & sz = 0 { R3 = R3 - 1; local addr:4; bankifyDP(addr, R3); export *:1 addr; }
+eab_predec:       "@-R4"    is Rn=4 & mode = 11 & sz = 0 { R4 = R4 - 1; local ptr24:4 = spSegment(EP, R4); export *:1 ptr24; }
+eab_predec:       "@-R5"    is Rn=5 & mode = 11 & sz = 0 { R5 = R5 - 1; local ptr24:4 = spSegment(EP, R5); export *:1 ptr24; }
 eab_predec:       "@-FP"    is Rn=6 & mode = 11 & sz = 0 { FP = FP - 1; local ptr24:4 = spSegment(TP, FP); export *:1 ptr24; }
 eab_predec:       "@-SP"    is Rn=7 & mode = 11 & sz = 0 { SP = SP - 1; local ptr24:4 = spSegment(TP, SP); export *:1 ptr24; }
 
-eaw_predec:       "@-R0"    is Rn=0 & mode = 11 & sz = 1 { R0 = R0 - 2; local addr:4 = (zext(DP) << 16) | zext(R0); export *:2 addr; }
-eaw_predec:       "@-R1"    is Rn=1 & mode = 11 & sz = 1 { R1 = R1 - 2; local addr:4 = (zext(DP) << 16) | zext(R1); export *:2 addr; }
-eaw_predec:       "@-R2"    is Rn=2 & mode = 11 & sz = 1 { R2 = R2 - 2; local addr:4 = (zext(DP) << 16) | zext(R2); export *:2 addr; }
-eaw_predec:       "@-R3"    is Rn=3 & mode = 11 & sz = 1 { R3 = R3 - 2; local addr:4 = (zext(DP) << 16) | zext(R3); export *:2 addr; }
-eaw_predec:       "@-R4"    is Rn=4 & mode = 11 & sz = 1 { R4 = R4 - 2; local addr:4 = (zext(EP) << 16) | zext(R4); export *:2 addr; }
-eaw_predec:       "@-R5"    is Rn=5 & mode = 11 & sz = 1 { R5 = R5 - 2; local addr:4 = (zext(EP) << 16) | zext(R5); export *:2 addr; }
+eaw_predec:       "@-R0"    is Rn=0 & mode = 11 & sz = 1 { R0 = R0 - 2; local addr:4; bankifyDP(addr, R0); export *:2 addr; }
+eaw_predec:       "@-R1"    is Rn=1 & mode = 11 & sz = 1 { R1 = R1 - 2; local addr:4; bankifyDP(addr, R1); export *:2 addr; }
+eaw_predec:       "@-R2"    is Rn=2 & mode = 11 & sz = 1 { R2 = R2 - 2; local addr:4; bankifyDP(addr, R2); export *:2 addr; }
+eaw_predec:       "@-R3"    is Rn=3 & mode = 11 & sz = 1 { R3 = R3 - 2; local addr:4; bankifyDP(addr, R3); export *:2 addr; }
+eaw_predec:       "@-R4"    is Rn=4 & mode = 11 & sz = 1 { R4 = R4 - 2; local ptr24:4 = spSegment(EP, R4); export *:2 ptr24; }
+eaw_predec:       "@-R5"    is Rn=5 & mode = 11 & sz = 1 { R5 = R5 - 2; local ptr24:4 = spSegment(EP, R5); export *:2 ptr24; }
 eaw_predec:       "@-FP"    is Rn=6 & mode = 11 & sz = 1 { FP = FP - 2; local ptr24:4 = spSegment(TP, FP); export *:2 ptr24; }
 eaw_predec:       "@-SP"    is Rn=7 & mode = 11 & sz = 1 { SP = SP - 2; local ptr24:4 = spSegment(TP, SP); export *:2 ptr24; }
 
-eab_postinc:      "@R0+"    is Rn=0 & mode = 12 & sz = 0 { local addr:4 = (zext(DP) << 16) | zext(R0); R0 = R0 + 1; export *:1 addr; }
-eab_postinc:      "@R1+"    is Rn=1 & mode = 12 & sz = 0 { local addr:4 = (zext(DP) << 16) | zext(R1); R1 = R1 + 1; export *:1 addr; }
-eab_postinc:      "@R2+"    is Rn=2 & mode = 12 & sz = 0 { local addr:4 = (zext(DP) << 16) | zext(R2); R2 = R2 + 1; export *:1 addr; }
-eab_postinc:      "@R3+"    is Rn=3 & mode = 12 & sz = 0 { local addr:4 = (zext(DP) << 16) | zext(R3); R3 = R3 + 1; export *:1 addr; }
-eab_postinc:      "@R4+"    is Rn=4 & mode = 12 & sz = 0 { local addr:4 = (zext(EP) << 16) | zext(R4); R4 = R4 + 1; export *:1 addr; }
-eab_postinc:      "@R5+"    is Rn=5 & mode = 12 & sz = 0 { local addr:4 = (zext(EP) << 16) | zext(R5); R5 = R5 + 1; export *:1 addr; }
+eab_postinc:      "@R0+"    is Rn=0 & mode = 12 & sz = 0 { local addr:4; bankifyDP(addr, R0); R0 = R0 + 1; export *:1 addr; }
+eab_postinc:      "@R1+"    is Rn=1 & mode = 12 & sz = 0 { local addr:4; bankifyDP(addr, R1); R1 = R1 + 1; export *:1 addr; }
+eab_postinc:      "@R2+"    is Rn=2 & mode = 12 & sz = 0 { local addr:4; bankifyDP(addr, R2); R2 = R2 + 1; export *:1 addr; }
+eab_postinc:      "@R3+"    is Rn=3 & mode = 12 & sz = 0 { local addr:4; bankifyDP(addr, R3); R3 = R3 + 1; export *:1 addr; }
+eab_postinc:      "@R4+"    is Rn=4 & mode = 12 & sz = 0 { local ptr24:4 = spSegment(EP, R4); R4 = R4 + 1; export *:1 ptr24; }
+eab_postinc:      "@R5+"    is Rn=5 & mode = 12 & sz = 0 { local ptr24:4 = spSegment(EP, R5); R5 = R5 + 1; export *:1 ptr24; }
 eab_postinc:      "@FP+"    is Rn=6 & mode = 12 & sz = 0 { local ptr24:4 = spSegment(TP, FP); FP = FP + 1; export *:1 ptr24; }
 eab_postinc:      "@SP+"    is Rn=7 & mode = 12 & sz = 0 { local ptr24:4 = spSegment(TP, SP); SP = SP + 1; export *:1 ptr24; }
 
-eaw_postinc:      "@R0+"    is Rn=0 & mode = 12 & sz = 1 { local addr:4 = (zext(DP) << 16) | zext(R0); R0 = R0 + 2; export *:2 addr; }
-eaw_postinc:      "@R1+"    is Rn=1 & mode = 12 & sz = 1 { local addr:4 = (zext(DP) << 16) | zext(R1); R1 = R1 + 2; export *:2 addr; }
-eaw_postinc:      "@R2+"    is Rn=2 & mode = 12 & sz = 1 { local addr:4 = (zext(DP) << 16) | zext(R2); R2 = R2 + 2; export *:2 addr; }
-eaw_postinc:      "@R3+"    is Rn=3 & mode = 12 & sz = 1 { local addr:4 = (zext(DP) << 16) | zext(R3); R3 = R3 + 2; export *:2 addr; }
-eaw_postinc:      "@R4+"    is Rn=4 & mode = 12 & sz = 1 { local addr:4 = (zext(EP) << 16) | zext(R4); R4 = R4 + 2; export *:2 addr; }
-eaw_postinc:      "@R5+"    is Rn=5 & mode = 12 & sz = 1 { local addr:4 = (zext(EP) << 16) | zext(R5); R5 = R5 + 2; export *:2 addr; }
+eaw_postinc:      "@R0+"    is Rn=0 & mode = 12 & sz = 1 { local addr:4; bankifyDP(addr, R0); R0 = R0 + 2; export *:2 addr; }
+eaw_postinc:      "@R1+"    is Rn=1 & mode = 12 & sz = 1 { local addr:4; bankifyDP(addr, R1); R1 = R1 + 2; export *:2 addr; }
+eaw_postinc:      "@R2+"    is Rn=2 & mode = 12 & sz = 1 { local addr:4; bankifyDP(addr, R2); R2 = R2 + 2; export *:2 addr; }
+eaw_postinc:      "@R3+"    is Rn=3 & mode = 12 & sz = 1 { local addr:4; bankifyDP(addr, R3); R3 = R3 + 2; export *:2 addr; }
+eaw_postinc:      "@R4+"    is Rn=4 & mode = 12 & sz = 1 { local ptr24:4 = spSegment(EP, R4); R4 = R4 + 2; export *:2 ptr24; }
+eaw_postinc:      "@R5+"    is Rn=5 & mode = 12 & sz = 1 { local ptr24:4 = spSegment(EP, R5); R5 = R5 + 2; export *:2 ptr24; }
 eaw_postinc:      "@FP+"    is Rn=6 & mode = 12 & sz = 1 { local ptr24:4 = spSegment(TP, FP); FP = FP + 2; export *:2 ptr24; }
 eaw_postinc:      "@SP+"    is Rn=7 & mode = 12 & sz = 1 { local ptr24:4 = spSegment(TP, SP); SP = SP + 2; export *:2 ptr24; }
 #eab_abs8:         "@"^addr8^":8"            is Rn = 5 & mode = 0 & sz = 0; addr8  { export *:1 addr8; }
@@ -707,12 +794,12 @@ define token addrMode2(8)
 ;
 attach variables [ Rn2 ] [ R0 R1 R2 R3 R4 R5 FP SP ];
 
-Rn_banked2:      "R0"              is Rn2=0 { local addr:4 = (zext(DP) << 16) | zext(R0); export addr; }
-Rn_banked2:      "R1"              is Rn2=1 { local addr:4 = (zext(DP) << 16) | zext(R1); export addr; }
-Rn_banked2:      "R2"              is Rn2=2 { local addr:4 = (zext(DP) << 16) | zext(R2); export addr; }
-Rn_banked2:      "R3"              is Rn2=3 { local addr:4 = (zext(DP) << 16) | zext(R3); export addr; }
-Rn_banked2:      "R4"              is Rn2=4 { local addr:4 = (zext(EP) << 16) | zext(R4); export addr; }
-Rn_banked2:      "R5"              is Rn2=5 { local addr:4 = (zext(EP) << 16) | zext(R5); export addr; }
+Rn_banked2:      "R0"              is Rn2=0 { local addr:4; bankifyDP(addr, R0); export addr; }
+Rn_banked2:      "R1"              is Rn2=1 { local addr:4; bankifyDP(addr, R1); export addr; }
+Rn_banked2:      "R2"              is Rn2=2 { local addr:4; bankifyDP(addr, R2); export addr; }
+Rn_banked2:      "R3"              is Rn2=3 { local addr:4; bankifyDP(addr, R3); export addr; }
+Rn_banked2:      "R4"              is Rn2=4 { local ptr24:4 = spSegment(EP, R4); export ptr24; }
+Rn_banked2:      "R5"              is Rn2=5 { local ptr24:4 = spSegment(EP, R5); export ptr24; }
 Rn_banked2:      "FP"              is Rn2=6 { local ptr24:4 = spSegment(TP, FP); export ptr24; }
 Rn_banked2:      "SP"              is Rn2=7 { local ptr24:4 = spSegment(TP, SP); export ptr24; }
 

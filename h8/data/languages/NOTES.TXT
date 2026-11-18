@@ -1,17 +1,95 @@
 === TODO, BUGS, ETC ===
 
-Function purges are not automatically determined. X86 stcdall purges seem to be analysed
-by a plugin ("ghidra.app.plugin.core.function.X86FunctionPurgeAnalyzer") so a plugin is
-probably needed to sort this out for the H8/500, too.
+DESIGN: function purges are determined automatically by two Ghidra Analyzers modelled
+on Ghidra's own X86FunctionPurgeAnalyzer: H8FunctionPurgeAnalyzer covers PRTD/RTD
+(variable, immediate-encoded purge sizes), and H8ExtraPopAnalyzer covers the
+fixed-size RTS(2)/PRTS(4)/RTE(6) returns via func.setStackPurgeSize(). Note this does
+not eliminate the spacebase warning quirk below -- extrapop being correctly resolved
+and the decompiler's stack-pointer solver tracking the spacebase fully are two
+separate mechanisms; see the quirk below for why the warning still fires even with
+purge sizes fully determined.
 
-Still having trouble with the decompiler being "unable to track spacebase fully for stack."
-This may be responsible for the decompiler having difficulty assigning local variables.
+STACKSHIFT AND PURGE RULE (2026-11-11): The analyzers above store the WHOLE pop of
+the return instruction as the function purge (rts 2, prts 4, rte 6; the return
+address is included). Ghidra's FunctionPrototype.grabFromFunction computes a callee's
+extrapop as purge + the calling convention's stackshift, so EVERY prototype in
+h8539f.cspec must have stackshift="0". Any value above 0 counts the return address
+twice and lifts the decompiler's tracked SP by that amount at every call, which
+shows up as "uStackNNNN = <return address>" stores in callers and as phantom stack
+arguments (measured on RVR 21000011: 353 of 1614 call sites with such a store at
+stackshift 2/4, 0 at stackshift 0). Do not set stackshift above 0 on a prototype
+used with an analyzer-set purge. The generic h8.cspec (H8538F, H8520Max) still has
+stackshift 2; the analyzers only run on H8539F (canAnalyze), so it was left alone.
+
+A purge can also be stored first by Ghidra itself (its Stack analysis, or applying a
+function signature), and H8ExtraPopAnalyzer/H8FunctionPurgeAnalyzer never overwrite a
+non-zero value, so a wrong value stays. Five functions in the RVR ROM had one (12, 12,
+16, 2, 2; the real pop is 4). H8PurgeEnforcementAnalyzer ("H8 Stack Purge Enforcer",
+last priority, enabled by default) corrects a stored purge that differs from the return
+pop only when the function has no calls and Ghidra's depth tracking shows SP balanced
+at every return; otherwise it only warns, with the evidence, because Ghidra's
+CallDepthChangeInfo does not model what a callee pops (it shows -4 per pjsr). A wrong
+purge on a function WITH calls is therefore reported, not fixed. It also warns about
+any prototype with stackshift != 0.
+
+For any new ROM: run the auto-analysis, read the log lines of the purge analyzers and
+the enforcer, then run "ghidra scripts/measure/CheckStackPurge.java" (read-only; it is
+not on Ghidra's script path, so copy it to %USERPROFILE%\ghidra_scripts or run it
+inline). It prints stackshift != 0, every purge mismatch with evidence (calls, depth
+at the returns, the caller's cleanup after each call) and a RESULT line. Expect
+RESULT OK. Not yet tested on a freshly imported ROM (only on one whose purges were
+already set).
+QUIRK (understood, accepted, not fixing): the decompiler prints "unable to track
+spacebase fully for stack" on functions that use @-SP/@SP+ (predec/postinc) stack
+addressing -- e.g. isr_sci1_eri. Not an extrapop bug and not a missing DP/EP spacebase
+declaration (we deliberately don't model DP/EP as spacebase registers -- see the
+x86-segment precedent, can't have two spacebase regs writing into the same ram space).
+
+Root cause is in Ghidra's own StackSolver (coreaction.cc, ActionStackPtrFlow::
+analyzeExtraPop): it only recognises SP-derived varnodes defined via INT_ADD, COPY,
+INDIRECT, MULTIEQUAL, or INT_AND. Our eab_predec/eab_postinc constructors for @-SP/@SP+
+do `SP = SP - 1` (fine) then export a `ptr24` local built via our own spSegment()
+userop (a CALLOTHER) -- which isn't one of the five recognised shapes, so the solver
+can't solve for it and prints the warning. This is inherent to layering a custom
+segment userop on a plain SP stackpointer for 24-bit addressing; not a Ghidra defect
+worth reporting upstream, just a narrow analyzer meeting an addressing model it wasn't
+built for. Treated as cosmetic unless a specific function's decompiled *output* (not
+just the warning) is shown to be wrong.
+
+This may be partially responsible for the decompiler having difficulty assigning local
+variables, though that hasn't been confirmed as a downstream effect yet.
 
 Maybe consider making all general registers 24-bit (or giving them access to a 24-bit
-extension) with copies of DP/EP/TP in the high byte, like I've already done for FP/SP.
-Maybe this will make it easier for the decompiler to understand pointers, etc. Though
-it will probably make it harder to do 32-bit maths, such as MULXU where the result is
-in R0:R1.
+extension) with copies of DP/EP/TP in the high byte. CORRECTION: FP/SP are NOT actually widened registers either -- `define register` still declares
+R0-R5/FP/SP as plain size=2 (16-bit). SP24/FP24 are separate size=4 pseudo-registers,
+and for every other Rn the "24-bit" value is just a `local addr`/`local ptr24` computed
+fresh at each addressing-mode use site (via `(zext(DP)<<16)|zext(Rn)` or spSegment()),
+not persistent register state. So this idea would be new work across the board, not an
+extension of an existing FP/SP pattern -- and per the spacebase quirk above, doing it via
+a userop like spSegment() is exactly what keeps the decompiler's stack-pointer solver
+from tracking these varnodes, so a real 24-bit-register approach would need to avoid
+CALLOTHER if it's meant to also fix that warning. Maybe this will make it easier for
+the decompiler to understand pointers, etc. Though it will probably make it harder to
+do 32-bit maths, such as MULXU where the result is in R0:R1.
+
+STOP -- before attempting broad widening, read this: this was already tried and hit a
+hard Ghidra platform ceiling, not just left undone. Two separate one-per-address-space
+limits are already maxed out:
+  1. <segmentop> -- Ghidra allows only ONE per address space. This is *why* spSegment()
+     exists as a single shared userop for TP-banked registers (FP/SP push-pop, R4-R7)
+     instead of each bank register getting its own inline widening.
+  2. constresolve (context resolution) -- also one-per-space, and TP already holds that
+     slot. EP banking was actually built, wired up, and confirmed stable, but delivers
+     NO decompiler benefit for dynamic EP values because of this -- proven dead end,
+     not an oversight.
+Widening DP/EP the way SP/FP were partially done would hit the exact same ceiling that
+already made EP banking a no-op. This is a hard platform limit, confirmed by testing,
+not unclaimed work -- don't re-attempt "widen everything" without a new mechanism that
+gets around limits 1 and 2 above. The only narrower, still-open option is reworking
+just the SP/FP push-pop path to avoid spSegment()'s CALLOTHER shape (e.g. inline
+arithmetic like R0-R3 already use) purely to fix the spacebase solver warning above --
+that's a real tradeoff (lose segment-aware pointer typing for SP/FP) and does NOT
+touch DP/EP's separately-confirmed limitation at all.
 
 Also maybe consider padding all 24-bit things to 32-bit.
 
@@ -169,3 +247,28 @@ multiplier) at the same I/O addresses. The full register map from h8539f.pspec c
 ported to h8538f.pspec directly, with the exception of the flash memory control
 registers (FLMCR, FLM_EBR1, FLM_EBR2, FLMER, FLMSR) which are 539F-specific --
 the 538 uses EPROM, not flash.
+
+
+2026-10-29: hybrid R0-R5 displacement grammar and funcptr align=1
+  - @(d:16,Rn) and @(d:8,Rn) for R0-R5: displacement sign bit clear -> spSegment(DP|EP,Rn)+disp (unchanged);
+    sign bit set -> disp added in 16 bits, then spSegment (so a negative displacement wraps inside the bank).
+    Implemented with a sign alias field (disp8sg / disp16sg) and one constructor per register and sign.
+  - h8539f.cspec: <funcptr align="1" />. Function pointers on this CPU can point at odd addresses; align="2" left
+    calls to odd-address functions unresolved (595-948 per ROM) and, together with the grammar change, broke the
+    switch at 0x28b2f.
+  - Both changes belong together: either one alone makes that switch function fail to decompile.
+  - Ghidra stores instruction prototypes in the program database. After editing a .slaspec, an existing project keeps
+    showing the old p-code until instructions are cleared and re-disassembled (or the program is re-imported).
+  - Measurements: review28.md (Correction) and review29.md.
+
+2026-10-30: H8PreservedRegsAnalyzer and the _pR1/_pR2/_pR1R2 calling-convention clones
+  - h8539f.cspec ends with 15 clones (5 conventions x R1, R2, R1R2): same as the base convention except the named
+    registers move from killedbycall to unaffected. H8PreservedRegsAnalyzer (h8539f-analyzers.jar, disabled by default)
+    assigns them to functions that save R1/R2 at entry and restore them before every return (stm/ldm or push/pop).
+  - It keeps each function's existing convention (several are inferred) and changes only those registers; every change
+    has a bookmark in category "H8 Preserved Registers"; Dry run option; reverts if the evidence disappears.
+  - After changing the jar or cspec: restart Ghidra, tick the analyzer under Analysis > Auto Analyze, and (for an
+    existing program) clear and re-disassemble first if the grammar also changed.
+  - The stack-pop analyzers (H8ExtraPopAnalyzer, H8FunctionPurgeAnalyzer) already set the purge size of 726/741 RVR
+    functions, so stack pop is NOT the cause of the remaining stack arrays; shrinking the 512-byte stack parameter slot
+    to 32 changed nothing.

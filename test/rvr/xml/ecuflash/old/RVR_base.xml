@@ -236,10 +236,6 @@
 		<table name="RPM" address="2d0a0" type="Y Axis" elements="16" scaling="RPM"/>
 	</table>
 
-	<table name="Accel Enrichment" category="Fuel" address="11cb5" type="2D" level="2" scaling="EnrichmentAdj">
-		<table name="RPM" address="2d68a" type="Y Axis" elements="10" scaling="RPM"/>
-	</table>
-
 	<table name="Post Start Enrich Trim vs Load" category="Fuel" address="11d86" type="2D" level="2" scaling="Percent (128)">
 		<table name="Load" address="2d35e" type="X Axis" elements="14" scaling="Load"/>
 	</table>
@@ -289,9 +285,18 @@
 		<table name="Engine Speed" address="2d11c" type="X Axis" elements="10" scaling="RPM"/>
 	</table>
 
-	<table name="Limp Home - TPS Table" category="Fuel" address="11dc9" type="3D" level="2" swapxy="true" scaling="uint8">
-		<table name="TPS" address="2d3f8" type="X Axis" elements="5" scaling="Volts16"/>
-		<table name="RPM" address="2d3ee" type="Y Axis" elements="5" scaling="RPM"/>
+	<!-- RENAMED and axes FIXED 2026-08-04, matching ROM-specific override in
+	     new/21000011_1997-2001_RVR_X3_Mt__4g63t_.xml. This is NOT a limp home /
+	     TPS table - it belongs to f0ba_f2d0_o2_mode7_8_correction_calc (0x242f5),
+	     confirmed by direct xref and disassembly. Table DATA address 11dc9 was
+	     already correct; only the axes and name were wrong. Name kept identical
+	     to the override entry so ECUFlash's name-based override matching works
+	     correctly (previously the override renamed this table while the base
+	     kept the old name, so ECUFlash showed the old broken base entry as a
+	     separate, still-active table instead of replacing it). -->
+	<table name="TABLE_3D_00011DC9_O2Mode7_8Correction (possible: Lean Spool Load)" category="Fuel" address="11dc9" type="3D" level="2" swapxy="true" scaling="uint8">
+		<table name="Axis1 (possible: RPM)" address="2d3ee" type="X Axis" elements="5" scaling="raw"/>
+		<table name="Axis2 (possible: Load)" address="2d3fe" type="Y Axis" elements="7" scaling="raw"/>
 	</table>
 
 	<table name="Min Coolant Temp for Closed Loop" category="Fuel" address="108a4" type="1D" level="2" scaling="Temp"/>
@@ -761,20 +766,30 @@
 	<table name="TCU Torque Target Fall Rate Limit" category="Transmission" address="10ace" type="1D" level="2" scaling="uint16"/>
 
 	<!-- Min throttle load for TCU active (below this, TCU shift mgmt exits early) -->
-	<!-- ROM 0xad2 = 0x00bc = 188 -->
-	<table name="TCU Min Load Threshold" category="Transmission" address="10ad2" type="1D" level="2" scaling="uint16"/>
+	<!-- CORRECTED 2026-07-26: was address="10ad2" (claimed 0x00bc=188); verified via live ROM read
+	     that 0x00bc actually sits at 0x10ad4, and 0x10ad2 holds 0x061a=1562. See review.md TCU
+	     rate-limit verification entry. -->
+	<!-- ROM 0xad4 = 0x00bc = 188 -->
+	<table name="TCU Min Load Threshold" category="Transmission" address="10ad4" type="1D" level="2" scaling="uint16"/>
 
 	<!-- Max torque target cap (absolute ceiling) -->
-	<!-- ROM 0xad4 = 0x0014 = 20 -->
-	<table name="TCU Torque Target Max" category="Transmission" address="10ad4" type="1D" level="2" scaling="uint16"/>
+	<!-- CORRECTED 2026-07-26: was address="10ad4" (claimed 0x0014=20); verified via live ROM read
+	     that 0x0014 actually sits at 0x10ad6. -->
+	<!-- ROM 0xad6 = 0x0014 = 20 -->
+	<table name="TCU Torque Target Max" category="Transmission" address="10ad6" type="1D" level="2" scaling="uint16"/>
 
 	<!-- Torque ramp rate limit (added to tcu_torque_actual for max rate) -->
-	<!-- ROM 0xad8 = 0x000f = 15 -->
-	<table name="TCU Torque Ramp Rate" category="Transmission" address="10ad8" type="1D" level="2" scaling="uint16"/>
+	<!-- CORRECTED 2026-07-26: was address="10ad8" (claimed 0x000f=15); verified via live ROM read
+	     that 0x000f actually sits at 0x10ada, and 0x10ad8 holds 0x00fa=250 (this table and
+	     "Torque Reduction Scale" below were also address-swapped in the original entry). -->
+	<!-- ROM 0xada = 0x000f = 15 -->
+	<table name="TCU Torque Ramp Rate" category="Transmission" address="10ada" type="1D" level="2" scaling="uint16"/>
 
 	<!-- Torque reduction scaling divisor for shift events (muldiv, 0x200 = 512 = 1.0 scale) -->
-	<!-- ROM 0xada = 0x00fa = 250 -->
-	<table name="TCU Torque Reduction Scale" category="Transmission" address="10ada" type="1D" level="2" scaling="uint16"/>
+	<!-- CORRECTED 2026-07-26: was address="10ada" (claimed 0x00fa=250); verified via live ROM read
+	     that 0x00fa actually sits at 0x10ad8. -->
+	<!-- ROM 0xad8 = 0x00fa = 250 -->
+	<table name="TCU Torque Reduction Scale" category="Transmission" address="10ad8" type="1D" level="2" scaling="uint16"/>
 
 	<!-- Max slip adjustment clamp (tcu_torque_slip_adj ceiling) -->
 	<!-- ROM 0xb1a -->

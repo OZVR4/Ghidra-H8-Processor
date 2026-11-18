@@ -1,8 +1,43 @@
 # H8/539F ECU - Master Setup Script
 # @category MitsubishiECU
 #
-# Single master script for H8/539F ROM import and annotation.
+# ROM SETUP + AUTO-ANALYSIS ONLY. Table annotation (XML import + ROM
+# scraper) has been split into a separate script -- see PIPELINE below.
 # Run IMMEDIATELY after import, BEFORE clicking "Analyze".
+#
+# PIPELINE (run in this order):
+#   1. h8539_ecu_master_setup_new3.py   <- this script (setup + analysis)
+#   2. h8539_import_tables_xml.py       <- XML import + ROM scraper,
+#                                           runs AFTER auto-analysis
+#   3. h8539_export_tables_xml.py       <- writes labeled tables back
+#                                           out to EcuFlash-style XML
+#
+# WHY XML/SCRAPER MOVED OUT AND MOVED LATER (2026-07-29):
+#   XML import and scraping used to run in this script, BEFORE Step 6
+#   auto-analysis, on the theory that typing table headers as data early
+#   would "protect" them from the disassembler walking through them. Two
+#   things changed that:
+#     (1) a live gap-scan on a fresh, un-annotated ROM showed that on this
+#         ROM/analyzer combination, auto-analysis does NOT wander into the
+#         known table regions on its own in the first place -- so that
+#         protection wasn't actually load-bearing for most of the ROM.
+#     (2) the real risk on this pipeline was never auto-analysis eating
+#         tables -- it's community XML addresses being wrong (review.md
+#         item 17) or the byte-pattern scraper false-positiving on code
+#         that merely looks table-shaped (review.md item 3). Both of
+#         those get BETTER, not worse, detection when checked after
+#         auto-analysis has run: is_likely_code() (the check that catches
+#         "this address is actually real code, not a table") has more
+#         xrefs and instructions to work with post-analysis, so a
+#         REJECTED/VERIFIED verdict is checked against final, settled ROM
+#         state on the first pass, instead of needing a later rescue pass
+#         to fix a verdict that was only ever a stale pre-analysis
+#         snapshot (the old Step 9's entire original reason for existing).
+#   Step 5b below stays in THIS script as the one exception: it only
+#   types the fixed-offset MUT table (a known ROM-structure constant, not
+#   XML/scraper-derived), which is cheap, always-safe insurance against a
+#   previously-observed runaway-function merge bug (see that step's own
+#   comment for the concrete incident this fixes).
 #
 # STEPS (each individually toggleable via prompts):
 #
@@ -16,33 +51,21 @@
 #   Step 4c - prts/rts function-start scan (report only, fallback/backup
 #             for h8539pattern.xml)
 #   Step 5  - Decompiler health check       (always runs, gates Step 6)
-#   Step 5c - EcuFlash XML table labelling + pre-analysis protection
-#              - Prompts for XML file via file browser
-#              - Verifies ROM ID matches XML before touching anything -
-#                a mismatched/wrong-revision XML is rejected outright
-#              - On a match: labels AND types table headers as data
-#                immediately (xml_addr - header_size), so they're
-#                protected before Step 6 auto-analysis ever runs
-#              - 1D scalars: labeled/typed at their raw address
 #   Step 5b - Pre-analysis data table protection (STRONGLY RECOMMENDED) -
-#             types MUT/scaling/2D/3D table regions as data BEFORE
-#             auto-analysis runs, so it can't decode through them as code
+#             types the fixed-offset MUT table region as data BEFORE
+#             auto-analysis runs, so it can't decode through it as code.
+#             (Scaling/2D/3D heuristic typing was deliberately removed
+#             from this step already -- see its own comment below.)
 #   Step 6  - Auto-analysis
 #   Step 6b - Post-analysis undefined-byte gap report (report only)
 #   Step 6c - Disassembly error-bookmark triage: classifies "Bad Instruction"
 #             bookmarks left after analysis as padding, out-of-bounds flow,
 #             data mistakenly swept as code, or a genuine grammar gap, using
 #             only generic xref/flow signals (not tied to any known table
-#             byte-signature, unlike Step 5b/8 -- covers page 2 too)
-#   Step 8 - ROM header scraper (complements Step 5c XML labels, or stands
-#            alone if no XML was applied)
-#              - MUT table labels
-#              - Scaling table detection (6-byte header pattern)
-#              - 3D value table detection (0x03 + two RAM ptr words)
-#              - 2D value table detection (0x02 + one RAM ptr word)
-#              - All heuristics ported from mitsubishi-h8-539-rom-scraper
-#   Step 8d - Page 2 label-coverage marker (report only - flags the
-#             ROM scraper's known page-2 blind spot)
+#             byte-signature -- covers page 2 too)
+#
+# Once this script completes, run h8539_import_tables_xml.py to apply
+# EcuFlash XML labels and the ROM scraper against the now-analyzed program.
 #
 # IMPORT SETTINGS REQUIRED:
 #   Format:       Raw Binary
@@ -67,6 +90,7 @@ mem      = currentProgram.getMemory()
 space    = currentProgram.getAddressFactory().getDefaultAddressSpace()
 listing  = currentProgram.getListing()
 symTable = currentProgram.getSymbolTable()
+bookmarkMgr = currentProgram.getBookmarkManager()
 
 ROM_BASE  = 0x00010000
 ROM_END   = 0x0002FFFF
@@ -158,10 +182,22 @@ def safe_label_ram(ram_val, name):
         return
     safe_label(a, name)
 
-def safe_plate(a, text):
+def safe_plate(a, text, written_set=None):
     """
-    Append-only plate comment at Ghidra address 'a'.
-    Never duplicates text, never clobbers existing comments.
+    Plate comment at Ghidra address 'a'.
+
+    written_set (optional): a set shared across one whole XML-apply run
+    (a top-level apply_xml() call plus everything it recurses into via
+    <include>). On this address's FIRST touch within that run, any stale
+    plate comment left over from a PREVIOUS run is fully overwritten -
+    this is what stops re-imports from stacking old and new table text
+    forever. On a SECOND+ touch within the SAME run (e.g. two XML tables
+    genuinely overlapping the same code unit), behaviour falls back to
+    the old append-and-dedupe logic so both entries stay visible for that
+    one import.
+
+    If written_set is None (legacy callers, e.g. step 8's scanners),
+    behaves exactly as before: append-only, never clobbers.
     """
     try:
         from ghidra.program.model.listing import CodeUnit
@@ -193,17 +229,43 @@ def safe_plate(a, text):
                       "re-reported individually)" %
                       (cu.getMinAddress(), cu.getLength(), a))
             text = "[OVERLAP - VERIFY ADDRESS] " + text
+
+        key = str(cu.getMinAddress())
+        if written_set is not None and key not in written_set:
+            # First time this code unit has been written to in this run -
+            # replace whatever plate comment is already there (likely
+            # stale text from a previous XML import) instead of appending.
+            written_set.add(key)
+            cu.setComment(CodeUnit.PLATE_COMMENT, text)
+            return
+
         existing = cu.getComment(CodeUnit.PLATE_COMMENT)
         if existing and text in existing:
             return
         new_text = (existing + "\n" + text) if existing else text
         cu.setComment(CodeUnit.PLATE_COMMENT, new_text)
+        if written_set is not None:
+            written_set.add(key)
     except Exception as e:
         print("  WARNING plate comment @ %s: %s" % (a, e))
 
-def safe_plate_offset(cpu_offset, text):
+def safe_plate_offset(cpu_offset, text, written_set=None):
     """safe_plate variant taking a CPU-page-relative ROM offset."""
-    safe_plate(addr(ROM_BASE + cpu_offset), text)
+    safe_plate(addr(ROM_BASE + cpu_offset), text, written_set)
+
+def safe_bookmark(a, category, text):
+    """
+    Set/replace a NOTE bookmark at address 'a'. Ghidra's BookmarkManager
+    already de-dupes by (address, type, category) internally - calling
+    this again on the same address+category just updates the comment
+    text in place rather than creating a duplicate, so it's safe to call
+    on every re-run without accumulating bookmarks.
+    """
+    try:
+        from ghidra.program.model.listing import BookmarkType
+        bookmarkMgr.setBookmark(a, BookmarkType.NOTE, category, text)
+    except Exception as e:
+        print("  WARNING bookmark @ %s: %s" % (a, e))
 
 def safe_eol(cpu_offset, text):
     """Set EOL comment at a CPU-page-relative ROM offset."""
@@ -646,323 +708,43 @@ if not ok:
 print("[5] OK: Decompiler is healthy")
 
 # ──────────────────────────────────────────────────────────────────
-# ROM ID verification helper
-# ──────────────────────────────────────────────────────────────────
-
-def verify_rom_id(xml_root):
-    """
-    Read <internalidaddress> and <internalidhex> from the XML romid block,
-    then compare against actual ROM bytes.
-
-    Returns (True, details_str) on match or if romid fields are absent.
-    Returns (False, details_str) on mismatch - caller should warn/skip.
-    """
-    romid = xml_root.find('romid')
-    if romid is None:
-        return True, "No <romid> block in XML - skipping ID check"
-
-    id_addr_str = romid.findtext('internalidaddress', '').strip()
-    id_hex_str  = romid.findtext('internalidhex', '').strip()
-    xml_id_str  = romid.findtext('xmlid', '').strip()
-
-    if not id_addr_str or not id_hex_str:
-        return True, "No internalidaddress/internalidhex in XML - skipping ID check"
-
-    try:
-        id_addr = int(id_addr_str, 16)   # this is already an absolute Ghidra
-                                          # address (same convention as every
-                                          # table "address" attribute elsewhere
-                                          # in this file - do NOT add ROM_BASE)
-    except ValueError:
-        return True, "Could not parse internalidaddress '%s' - skipping" % id_addr_str
-
-    id_hex_clean = id_hex_str.replace(' ', '')
-    if len(id_hex_clean) % 2 != 0:
-        id_hex_clean = '0' + id_hex_clean
-    try:
-        expected_bytes = [int(id_hex_clean[i:i+2], 16)
-                          for i in range(0, len(id_hex_clean), 2)]
-    except ValueError:
-        return True, "Could not parse internalidhex '%s' - skipping" % id_hex_str
-
-    ghidra_id_addr = id_addr
-    actual_bytes = rom_bytes_at(ghidra_id_addr, len(expected_bytes))
-
-    expected_hex = ' '.join('%02X' % b for b in expected_bytes)
-    actual_hex   = ' '.join('%02X' % b for b in actual_bytes)
-
-    detail = ("XML ID  : %s (at Ghidra address 0x%08X)\n"
-              "Expected: %s\n"
-              "Actual  : %s" % (xml_id_str, ghidra_id_addr,
-                                expected_hex, actual_hex))
-
-    if expected_bytes == actual_bytes:
-        return True, detail
-    else:
-        return False, detail
-
-# ──────────────────────────────────────────────────────────────────
-# STEP 5c — EcuFlash XML table labelling + pre-analysis data protection
+# STEP 5b — Pre-analysis MUT table protection
 #
-# Moved to run BEFORE auto-analysis (Step 6) so that a ROM-ID-VERIFIED
-# XML's table headers get typed as data before the analyzer can decode
-# through them - the same protection Step 5b already gives the
-# byte-pattern scraper's tables, just driven by the real XML definitions
-# where one is available and matches this ROM.
+# ROOT CAUSE this originally fixed: on an earlier run, un-typed table
+# bytes let Ghidra's auto-analysis decode straight through them as
+# instructions; once it decoded garbage inside a table and kept falling
+# through, flow-following glued huge, unrelated stretches of the ROM
+# into one runaway function (observed: a single function body spanning
+# 0x20640-0x2FFFF after auto-analysis).
 #
-# The ROM-ID check is the safety net: a wrong/mismatched community XML
-# is rejected before it touches a single byte, exactly as before - moving
-# this step earlier does not weaken that check, it's the same gate, just
-# running sooner.
+# Only the fixed-offset MUT table is typed here now (a known
+# ROM-structure constant, not XML/scraper-derived) -- see the comment
+# further down in this function for why the general scaling/2D/3D
+# heuristic pass was deliberately removed from this step. XML- and
+# scraper-detected tables are handled entirely by the separate
+# h8539_import_tables_xml.py script, which runs AFTER this script's
+# Step 6 auto-analysis (see this file's header comment for the full
+# pipeline rationale) -- a live gap-scan showed auto-analysis doesn't
+# need pre-typing to stay out of most table regions on this ROM, so
+# this step is cheap, always-safe insurance for the one region
+# (MUT) where a concrete incident already showed it was needed, not a
+# general-purpose protection pass anymore.
 # ──────────────────────────────────────────────────────────────────
 
-def apply_xml(file_path, visited=None, id_verified=None):
+def protect_data_regions_early(xml_touched=None):
     """
-    Parse an EcuFlash XML, verify its ROM ID, then label table headers AND
-    type them as data (protecting them from auto-analysis).
-
-    ROM ID VERIFICATION:
-      Before touching anything, reads <internalidaddress> + <internalidhex>
-      from the XML and compares against actual ROM bytes. On mismatch:
-      prints a clear warning and skips entirely for that file (does NOT
-      abort the script). id_verified is a mutable list [True/False/None]
-      shared across the include chain so the check only runs once at the
-      top-level file.
-
-    ADDRESS STRATEGY:
-      2D/3D tables: header/type at (xml_addr - header_size) = true header address.
-      1D scalars  : header/type at xml_addr directly (no ROM header exists).
-
-    DEDUPLICATION:
-      Existing labels survive re-runs - only plate comments are updated.
-      Already-correctly-typed data regions are left alone.
-
-    INCLUDES:
-      <include> entries are followed recursively (cycle-guarded).
+    xml_touched: unused now that XML import runs in a separate,
+    post-analysis script -- kept as an accepted (but ignored-in-practice)
+    parameter so the Step 5b call site below doesn't need updating.
+    Historical docstring: set/list of CPU offsets already typed+verified
+    by the old in-script XML import step
+    (apply_xml's touched_offsets, i.e. only VERIFIED or NOTE-outside-ROM
+    entries -- REJECTED tables are never added there, so this pass can
+    still independently discover a real table sitting under a REJECTED
+    XML entry's neighborhood). Skipping these avoids re-scanning/racing
+    against regions the XML step already typed.
     """
-    if visited is None:
-        visited = set()
-    if id_verified is None:
-        id_verified = [None]   # None=unchecked, True=ok, False=failed
-
-    real_path = os.path.realpath(file_path)
-    if real_path in visited:
-        return (0, 0, 0, 0)
-    visited.add(real_path)
-
-    if not os.path.exists(file_path):
-        print("  WARNING: XML not found: " + file_path)
-        return (0, 0, 0, 0)
-
-    try:
-        root = ET.parse(file_path).getroot()
-    except Exception as e:
-        print("  WARNING: Could not parse XML: " + str(e))
-        return (0, 0, 0, 0)
-
-    # ── ROM ID check (only on the top-level file, not includes) ────
-    if id_verified[0] is None:
-        ok, detail = verify_rom_id(root)
-        id_verified[0] = ok
-        if ok:
-            print("  [ID] ROM ID verified OK")
-            print("  [ID] " + detail.replace("\n", "\n  [ID] "))
-        else:
-            print("  [ID] WARNING: ROM ID MISMATCH - skipping XML labels for this file")
-            print("  [ID] " + detail.replace("\n", "\n  [ID] "))
-            print("  [ID] Load the correct XML for this ROM and re-run this step.")
-            return (0, 0, 0, 0)
-
-    # If a parent file already failed ID check, propagate the skip
-    if id_verified[0] is False:
-        return (0, 0, 0, 0)
-
-    base_dir = os.path.dirname(file_path)
-
-    # Follow <include> references first (base definitions before overrides)
-    inc_h = inc_s = inc_a = inc_r = 0
-    for inc in root.findall('include'):
-        inc_name = (inc.text or "").strip()
-        if not inc_name:
-            continue
-        if not inc_name.endswith('.xml'):
-            inc_name += '.xml'
-        inc_path = os.path.join(base_dir, inc_name)
-        ih, is_, ia, ir = apply_xml(inc_path, visited, id_verified)
-        inc_h += ih; inc_s += is_; inc_a += ia; inc_r += ir
-
-    labeled_header = 0
-    labeled_scalar = 0
-    already_named  = 0
-    skipped_range  = 0
-
-    for table in root.findall('table'):
-        name     = table.get('name')
-        addr_str = table.get('address')
-        ttype    = table.get('type')
-        category = table.get('category') or ""
-        scaling  = table.get('scaling') or ""
-        swapxy   = table.get('swapxy') or ""
-        flipy    = table.get('flipy') or ""
-        level    = table.get('level') or ""
-
-        # Skip axis sub-tables
-        if ttype and ('Axis' in ttype or 'axis' in ttype):
-            continue
-        if not name or not addr_str:
-            continue
-
-        try:
-            xml_addr_int = int(addr_str, 16)
-        except ValueError:
-            continue
-
-        if not in_rom(xml_addr_int):
-            skipped_range += 1
-            continue
-
-        meta = ["EcuFlash Table : %s" % name]
-        if category: meta.append("Category       : %s" % category)
-        if ttype:    meta.append("Type           : %s" % ttype)
-        if scaling:  meta.append("Scaling        : %s" % scaling)
-        if swapxy:   meta.append("Swap XY        : %s" % swapxy)
-        if flipy:    meta.append("Flip Y         : %s" % flipy)
-        if level:    meta.append("Level          : %s" % level)
-
-        label_name = sanitise_name(name)
-
-        if ttype == "1D":
-            # ── 1D scalar: no ROM header, label at raw XML address ──
-            target_addr = addr(xml_addr_int)
-            type_header_as_data(target_addr, 2)   # protect before analysis
-            meta.append("Address        : 0x%05X  [scalar - no header]" % xml_addr_int)
-            plate_text = "\n".join(meta)
-            if symTable.getPrimarySymbol(target_addr) is not None:
-                already_named += 1
-            else:
-                safe_label(target_addr, label_name)
-                labeled_scalar += 1
-            safe_plate(target_addr, plate_text)
-
-        elif ttype in ("2D", "3D") or ttype is None:
-            # ── 2D/3D: label + type at header address (xml_addr - header_size) ──
-            hdr_size    = HEADER_SIZE.get(ttype, 4)
-            header_int  = xml_addr_int - hdr_size
-            header_addr = addr(header_int)
-
-            if not in_rom(header_int):
-                header_int  = xml_addr_int
-                header_addr = addr(header_int)
-                meta.append("NOTE: header offset (-%d) outside ROM; "
-                             "labeled at data address." % hdr_size)
-            else:
-                type_header_as_data(header_addr, hdr_size)   # protect before analysis
-                meta.append("Header address : 0x%05X  (code xrefs point here)" % header_int)
-                meta.append("Data address   : 0x%05X  (XML address, %d bytes in)" %
-                             (xml_addr_int, hdr_size))
-
-            plate_text = "\n".join(meta)
-            if symTable.getPrimarySymbol(header_addr) is not None:
-                already_named += 1
-            else:
-                safe_label(header_addr, label_name)
-                labeled_header += 1
-            safe_plate(header_addr, plate_text)
-
-        else:
-            # Unknown type
-            target_addr = addr(xml_addr_int)
-            meta.append("Address        : 0x%05X" % xml_addr_int)
-            meta.append("NOTE: unrecognised type '%s'" % ttype)
-            plate_text = "\n".join(meta)
-            if symTable.getPrimarySymbol(target_addr) is None:
-                safe_label(target_addr, label_name)
-            safe_plate(target_addr, plate_text)
-
-    total_h = labeled_header + inc_h
-    total_s = labeled_scalar + inc_s
-    total_a = already_named  + inc_a
-    total_r = skipped_range  + inc_r
-
-    print("  %s -> header-labeled: %d  scalar-labeled: %d  "
-          "plate-updated: %d  out-of-range: %d" %
-          (os.path.basename(file_path),
-           labeled_header, labeled_scalar, already_named, skipped_range))
-
-    return (total_h, total_s, total_a, total_r)
-
-
-PROGRAM_INFO_CATEGORY = "H8539F Setup Script"
-XML_APPLIED_KEY        = "Last XML Applied"
-XML_APPLIED_ROMID_KEY  = "Last XML ROM ID Verified"
-
-def get_last_xml_applied():
-    opts = currentProgram.getOptions(PROGRAM_INFO_CATEGORY)
-    path = opts.getString(XML_APPLIED_KEY, None)
-    ok   = opts.getBoolean(XML_APPLIED_ROMID_KEY, False)
-    return path, ok
-
-def set_last_xml_applied(path, id_ok):
-    opts = currentProgram.getOptions(PROGRAM_INFO_CATEGORY)
-    opts.setString(XML_APPLIED_KEY, path)
-    opts.setBoolean(XML_APPLIED_ROMID_KEY, id_ok)
-
-do_xml = askYesNo("Step 5c - XML Table Labels + Protection",
-    "Apply EcuFlash XML table labels BEFORE auto-analysis?\n\n"
-    "The ROM ID will be verified against the XML first - a mismatched\n"
-    "XML is rejected and nothing is touched.\n\n"
-    "On a match, table headers are labeled AND typed as data immediately,\n"
-    "protecting them from auto-analysis the same way Step 5b protects\n"
-    "scraper-detected tables.\n\n"
-    "You will be prompted to select the XML file.")
-
-if do_xml:
-    prev_path, prev_ok = get_last_xml_applied()
-    if prev_path:
-        print("[5c] NOTE: XML labels were already applied in a previous run:")
-        print("       File    : %s" % prev_path)
-        print("       ID OK   : %s" % prev_ok)
-        print("       Proceeding will re-verify the ROM ID and refresh labels/plates.")
-    xml_file = askFile("Select EcuFlash ROM Definition XML", "Open")
-    if xml_file is not None:
-        xml_path = xml_file.getAbsolutePath()
-        print("[5c] Applying XML labels from: " + xml_path)
-        tx = currentProgram.startTransaction("EcuFlash XML labels")
-        try:
-            _id_verified = [None]   # captures verify_rom_id's real result
-            h, s, a, r = apply_xml(xml_path, id_verified=_id_verified)
-            print("[5c] Total -> header-labeled: %d  scalar-labeled: %d  "
-                  "plate-updated: %d  out-of-range: %d" % (h, s, a, r))
-            id_ok = bool(_id_verified[0])
-            set_last_xml_applied(xml_path, id_ok)
-        finally:
-            currentProgram.endTransaction(tx, True)
-    else:
-        print("[5c] No XML file selected")
-else:
-    print("[5c] Skipped XML table labels")
-
-# ──────────────────────────────────────────────────────────────────
-# STEP 5b — Pre-analysis data table protection
-#
-# ROOT CAUSE FIX for auto-analysis decoding into data tables:
-# The ROM header scraper (Step 8) only LABELS table regions - it never
-# actually types the bytes as Data. Combined with the scraper running
-# AFTER auto-analysis (Step 6), this meant Step 6 had zero knowledge that
-# MUT/scaling/2D/3D tables existed and would happily disassemble straight
-# through them as instructions. Once it decodes garbage inside a table and
-# keeps falling through, Ghidra's flow-following can glue huge, unrelated
-# stretches of the ROM into one runaway function (observed: a single
-# function body spanning 0x20640-0x2FFFF after auto-analysis).
-#
-# This step runs the SAME byte-pattern detection as Step 8, but only
-# TYPES the matched regions as Data (byte/word arrays) - no labels, no
-# plate comments (those still happen properly, with EcuFlash names and
-# context, at Step 8). Once bytes are typed as Data, the disassembler
-# will not walk through them, so auto-analysis can't merge them into code.
-# ──────────────────────────────────────────────────────────────────
-
-def protect_data_regions_early():
+    xml_touched = set(xml_touched) if xml_touched else set()
     from ghidra.program.model.data import ByteDataType, WordDataType, ArrayDataType
 
     def mark_range_as_data(cpu_offset, length, elem_type, elem_size):
@@ -987,101 +769,63 @@ def protect_data_regions_early():
     def in_range(val, lo, hi):
         return lo <= val <= hi
 
+    def find_sentinel_data_len(start, max_len=0x1FF):
+        """
+        Sentinel-based length scan (same logic used by the scraper in
+        h8539_import_tables_xml.py). Not actually called by this function
+        for anything anymore now that only the fixed-offset MUT table is
+        marked here (see the comment above 'marked = 0' below) -- kept in
+        case a future targeted fix needs it, so this scope doesn't have to
+        reintroduce it from scratch.
+        """
+        for j in range(max_len):
+            if rom_byte(start + j) == 0xFF:
+                return j + 1
+        return None
+
     marked = 0
 
     # ── MUT table: fixed offset, always safe to mark upfront ──
     if mark_range_as_data(MUT_OFFSET, MUT_ENTRIES * 2, WordDataType(), 2):
         marked += 1
 
-    # ── Scan for scaling / 2D / 3D tables (same detection as Step 8) ──
-    i = 0
-    while i < MUT_OFFSET - 6:
-        b = [rom_byte(i + j) for j in range(7)]
-
-        # Scaling table (6-byte header)
-        if (in_range(b[0], 0xF0, 0xF7) and in_range(b[2], 0xE0, 0xFE) and
-                b[4] == 0x00 and in_range(b[5], 0x02, 0x90)):
-            bogus = False
-            prev = rom_word(i + 6)
-            for j in range(0, 6, 2):
-                nv = rom_word(i + 6 + j)
-                if abs(nv - prev) > 0x1000:
-                    bogus = True
-                    break
-                prev = nv
-            if not bogus:
-                total_len = 6 + b[5] * 2
-                if mark_range_as_data(i, total_len, ByteDataType(), 1):
-                    marked += 1
-                i += total_len
-                continue
-
-        # 3D value table (7-byte header)
-        if b[0] == 0x03 and in_range(b[2], 0xE0, 0xFE) and in_range(b[4], 0xE0, 0xFE):
-            bogus = False
-            prev = rom_word(i + 7)
-            for j in range(0, 6, 2):
-                nv = rom_word(i + 7 + j)
-                if abs(nv - prev) > 0x4000:
-                    bogus = True
-                    break
-                prev = nv
-            if not bogus:
-                prev = rom_word(i + 7)
-                data_len = 2
-                for j in range(0, 0x1FF, 2):
-                    nv = rom_word(i + 7 + j)
-                    if abs(nv - prev) > 0x4000:
-                        data_len = j if j > 0 else 2
-                        break
-                    prev = nv
-                if b[6] - 1 >= 1:
-                    total_len = 7 + data_len
-                    if mark_range_as_data(i, total_len, ByteDataType(), 1):
-                        marked += 1
-                    i += total_len
-                    continue
-
-        # 2D value table (4-byte header)
-        if b[0] == 0x02 and in_range(b[2], 0xE0, 0xFE):
-            bogus = False
-            prev = rom_word(i + 4)
-            for j in range(0, 6, 2):
-                nv = rom_word(i + 4 + j)
-                if abs(nv - prev) > 0x4000:
-                    bogus = True
-                    break
-                prev = nv
-            if not bogus:
-                prev = rom_word(i + 4)
-                data_len = 2
-                for j in range(0, 0x1FF, 2):
-                    nv = rom_word(i + 4 + j)
-                    if abs(nv - prev) > 0x4000:
-                        data_len = j if j > 0 else 2
-                        break
-                    prev = nv
-                total_len = 4 + data_len
-                if mark_range_as_data(i, total_len, ByteDataType(), 1):
-                    marked += 1
-                i += total_len
-                continue
-
-        i += 1
+    # Scaling/2D/3D tables are deliberately NOT typed as data here. This
+    # used to run the same byte-pattern heuristic the scraper uses and
+    # commit to a guessed length/boundary before anything corroborated
+    # it -- but that guess could differ from what the scraper's own
+    # is_likely_code() computes later (it sees more once auto-analysis
+    # has actually run), so the two passes could re-type the same bytes
+    # with different boundaries and produce duplicate/conflicting plate
+    # comments (e.g. 0x12844). All XML- and scraper-driven table typing
+    # now happens entirely in h8539_import_tables_xml.py, which runs
+    # AFTER this script's Step 6 auto-analysis -- see this file's header
+    # comment for the full rationale. Only the fixed-offset MUT table is
+    # typed here, pre-analysis.
+    #
+    # Tradeoff: table regions no longer get PRE-analysis protection from
+    # this step specifically (the runaway-function merge bug this step
+    # was originally added to prevent). A live gap-scan on a fresh,
+    # un-annotated ROM showed auto-analysis doesn't actually wander into
+    # most table regions on its own here, so this tradeoff has held up in
+    # practice so far -- but if the runaway-merge symptom shows up again,
+    # re-check the affected function boundaries after Step 6 rather than
+    # re-adding a heuristic-driven typing pass to this step.
 
     return marked
 
 
-do_protect = askYesNo("Step 5b - Pre-Analysis Data Protection",
-    "Type MUT/scaling/2D/3D table regions as DATA before auto-analysis runs?\n\n"
+do_protect = askYesNo("Step 5b - Pre-Analysis MUT Table Protection",
+    "Type the fixed-offset MUT table region as DATA before auto-analysis runs?\n\n"
     "STRONGLY RECOMMENDED. Without this, auto-analysis has no way to know\n"
-    "these tables exist and can decode straight through them as code,\n"
+    "this table exists and can decode straight through it as code,\n"
     "sometimes merging huge unrelated stretches of the ROM into a single\n"
-    "runaway function.\n\n"
-    "This only types bytes as data - labels/plate comments still happen\n"
-    "properly later at Step 8.")
+    "runaway function (a concrete incident of this has been observed on\n"
+    "this ROM before).\n\n"
+    "This only types bytes as data - labels/plate comments for the MUT\n"
+    "table, and all XML/scraper table detection, happen properly later\n"
+    "in h8539_import_tables_xml.py.")
 if do_protect:
-    tx = currentProgram.startTransaction("Pre-analysis data protection")
+    tx = currentProgram.startTransaction("Pre-analysis MUT table protection")
     try:
         n_marked = protect_data_regions_early()
         print("[5b] OK: %d table region(s) typed as data before analysis" % n_marked)
@@ -1314,242 +1058,8 @@ else:
     print("[6c] Skipped disassembly error triage")
 
 print("")
-
-# ──────────────────────────────────────────────────────────────────
-# STEP 8 — ROM scraper
-# Ported from mitsubishi-h8-539-rom-scraper-main/index.js
-# Detects: MUT table, scaling tables, 3D value tables, 2D value tables
-# ──────────────────────────────────────────────────────────────────
-
-def run_rom_scraper():
-    """
-    Full ROM scraper ported from the JS reference implementation.
-
-    Pass 1 - MUT table (fixed offset 0x1FAD0):
-      256 entries x 2 bytes, each a RAM pointer to a diagnostic variable.
-
-    Pass 2 - Scaling tables (6-byte header):
-      [F0-F7] xx [E0-FE] xx 00 [02-90]
-      output RAM ptr | input RAM ptr | 0x00 | entry count
-      Followed by count*2 bytes of 16-bit scaling data.
-      Sanity: first 3 data words must not differ by > 0x1000.
-
-    Pass 3 - 3D value tables (7-byte header):
-      0x03 | padding | X-axis RAM ptr (word) | Y-axis RAM ptr (word) | nrows
-      Sanity: first 3 data words must not differ by > 0x4000.
-
-    Pass 4 - 2D value tables (4-byte header):
-      0x02 | padding | axis RAM ptr (word)
-      Sanity: first 3 data words must not differ by > 0x4000.
-
-    All passes use getPrimarySymbol() for existence checks (no hasNext bug).
-    """
-
-    def in_range(val, lo, hi):
-        return lo <= val <= hi
-
-    # ── Pass 1: MUT table ─────────────────────────────────────────
-    print("[8a] MUT table at ROM offset 0x%05X (Ghidra 0x%08X)..." %
-          (MUT_OFFSET, MUT_ADDR))
-    mut_count = 0
-    tx = currentProgram.startTransaction("MUT table labels")
-    try:
-        for i in range(MUT_ENTRIES):
-            off = MUT_OFFSET + i * 2
-            val = rom_word(off)
-            entry_lbl = "MUT_%02X_entry" % i
-            safe_label_offset(off, entry_lbl)
-            safe_plate_offset(off,
-                "MUT Table Entry\n"
-                "Index  : 0x%02X (%d)\n"
-                "Target : RAM:0x%04X" % (i, i, val))
-            safe_label_ram(val, "MUT_%02X" % i)
-            mut_count += 1
-    finally:
-        currentProgram.endTransaction(tx, True)
-    print("[8a] OK: %d MUT entries labeled" % mut_count)
-
-    # ── Pass 2: Scaling tables ────────────────────────────────────
-    print("[8b] Scanning for scaling tables (0x%08X - 0x%08X)..." %
-          (ROM_BASE, MUT_ADDR))
-    scaling_count = 0
-    tx = currentProgram.startTransaction("Scaling table labels")
-    try:
-        i = 0
-        while i < MUT_OFFSET - 5:
-            b = [rom_byte(i + j) for j in range(6)]
-            if (in_range(b[0], 0xF0, 0xF7) and
-                    in_range(b[2], 0xE0, 0xFE) and
-                    b[4] == 0x00 and
-                    in_range(b[5], 0x02, 0x90)):
-                # Sanity: first 3 data words
-                bogus = False
-                prev = rom_word(i + 6)
-                for j in range(0, 6, 2):
-                    nv = rom_word(i + 6 + j)
-                    if abs(nv - prev) > 0x1000:
-                        bogus = True
-                        break
-                    prev = nv
-                if not bogus:
-                    out_ptr = (b[0] << 8) | b[1]
-                    in_ptr  = (b[2] << 8) | b[3]
-                    count   = b[5]
-                    lbl     = "SCALING_TABLE_%08X" % (ROM_BASE + i)
-                    safe_label_offset(i, lbl)
-                    safe_plate_offset(i,
-                        "Scaling Table\n"
-                        "Out ptr : RAM:0x%04X\n"
-                        "In ptr  : RAM:0x%04X\n"
-                        "Entries : %d (%d bytes)" %
-                        (out_ptr, in_ptr, count, count * 2))
-                    safe_label_ram(out_ptr, "SCALING_OUT_%04X" % out_ptr)
-                    safe_label_ram(in_ptr,  "SCALING_IN_%04X"  % in_ptr)
-                    scaling_count += 1
-            i += 1
-    finally:
-        currentProgram.endTransaction(tx, True)
-    print("[8b] OK: %d scaling tables found" % scaling_count)
-
-    # ── Pass 3 & 4: 3D and 2D value tables ───────────────────────
-    print("[8c] Scanning for 2D/3D value tables...")
-    tbl3d = 0
-    tbl2d = 0
-    tx = currentProgram.startTransaction("Value table labels")
-    try:
-        i = 0
-        while i < MUT_OFFSET - 6:
-            b = [rom_byte(i + j) for j in range(7)]
-
-            # ── 3D ───────────────────────────────────────────────
-            if (b[0] == 0x03 and
-                    in_range(b[2], 0xE0, 0xFE) and
-                    in_range(b[4], 0xE0, 0xFE)):
-                bogus = False
-                prev = rom_word(i + 7)
-                for j in range(0, 6, 2):
-                    nv = rom_word(i + 7 + j)
-                    if abs(nv - prev) > 0x4000:
-                        bogus = True
-                        break
-                    prev = nv
-                if not bogus:
-                    # Measure data length
-                    prev = rom_word(i + 7)
-                    data_len = 2
-                    for j in range(0, 0x1FF, 2):
-                        nv = rom_word(i + 7 + j)
-                        if abs(nv - prev) > 0x4000:
-                            data_len = j if j > 0 else 2
-                            break
-                        prev = nv
-                    table_height = b[6] - 1
-                    if table_height >= 1:
-                        x_ptr = (b[2] << 8) | b[3]
-                        y_ptr = (b[4] << 8) | b[5]
-                        lbl   = "TABLE_3D_%08X" % (ROM_BASE + i)
-                        ghidra_a = addr(ROM_BASE + i)
-                        if symTable.getPrimarySymbol(ghidra_a) is None:
-                            safe_label_offset(i, lbl)
-                        safe_plate_offset(i,
-                            "ROM Scraper: 3D Value Table\n"
-                            "Header  : 7 bytes\n"
-                            "Height  : %d rows\n"
-                            "Data    : %d bytes\n"
-                            "X axis  : RAM:0x%04X\n"
-                            "Y axis  : RAM:0x%04X\n"
-                            "Data @  : 0x%08X" %
-                            (table_height, data_len,
-                             x_ptr, y_ptr, ROM_BASE + i + 7))
-                        safe_label_ram(x_ptr, "AXIS_X_%04X" % x_ptr)
-                        safe_label_ram(y_ptr, "AXIS_Y_%04X" % y_ptr)
-                        tbl3d += 1
-                        i += 7 + data_len
-                        continue
-
-            # ── 2D ───────────────────────────────────────────────
-            elif (b[0] == 0x02 and
-                  in_range(b[2], 0xE0, 0xFE)):
-                bogus = False
-                prev = rom_word(i + 4)
-                for j in range(0, 6, 2):
-                    nv = rom_word(i + 4 + j)
-                    if abs(nv - prev) > 0x4000:
-                        bogus = True
-                        break
-                    prev = nv
-                if not bogus:
-                    prev = rom_word(i + 4)
-                    data_len = 2
-                    for j in range(0, 0x1FF, 2):
-                        nv = rom_word(i + 4 + j)
-                        if abs(nv - prev) > 0x4000:
-                            data_len = j if j > 0 else 2
-                            break
-                        prev = nv
-                    axis_ptr = (b[2] << 8) | b[3]
-                    lbl      = "TABLE_2D_%08X" % (ROM_BASE + i)
-                    ghidra_a = addr(ROM_BASE + i)
-                    if symTable.getPrimarySymbol(ghidra_a) is None:
-                        safe_label_offset(i, lbl)
-                    safe_plate_offset(i,
-                        "ROM Scraper: 2D Value Table\n"
-                        "Header  : 4 bytes\n"
-                        "Data    : %d bytes\n"
-                        "Axis    : RAM:0x%04X\n"
-                        "Data @  : 0x%08X" %
-                        (data_len, axis_ptr, ROM_BASE + i + 4))
-                    safe_label_ram(axis_ptr, "AXIS_%04X" % axis_ptr)
-                    tbl2d += 1
-                    i += 4 + data_len
-                    continue
-
-            i += 1
-    finally:
-        currentProgram.endTransaction(tx, True)
-    print("[8c] OK: %d 3D tables, %d 2D tables found (%d total)" %
-          (tbl3d, tbl2d, tbl3d + tbl2d))
-    return mut_count, scaling_count, tbl3d, tbl2d
-
-
-# ──────────────────────────────────────────────────────────────────
-# Run Step 8
-# ──────────────────────────────────────────────────────────────────
-
-do_scraper = askYesNo("Step 8 - ROM Scraper",
-    "Run the ROM header scraper?\n\n"
-    "Detects MUT table, scaling tables, 2D/3D value tables by byte\n"
-    "pattern scan. Complements the Step 5c XML labels (if any were\n"
-    "applied) and catches tables the XML doesn't cover.\n"
-    "(MUT table, scaling tables, 2D/3D value tables by byte pattern)")
-if do_scraper:
-    run_rom_scraper()
-else:
-    print("[8] Skipped ROM scraper")
-
-# ──────────────────────────────────────────────────────────────────
-# STEP 8d — Page 2 coverage marker
-#
-# Not a fix - the ROM scraper (Step 8) only scans 0x0..MUT_OFFSET, i.e.
-# page 1 (README known limitation: embedded tables inline in page 2 code,
-# 0x20000+, aren't reached). This just reports how much of page 2 has any
-# labels at all, as a quick sanity check / reminder that page 2 needs a
-# manual pass or a future scraper extension.
-# ──────────────────────────────────────────────────────────────────
-PAGE2_START = 0x00020000
-page2_symbol_count = 0
-sym_iter = symTable.getSymbolIterator(addr(PAGE2_START), True)
-for s in sym_iter:
-    if s.getAddress().getOffset() > ROM_END:
-        break
-    page2_symbol_count += 1
-print("[8d] Page 2 (0x%08X-0x%08X) has %d labeled symbol(s). The ROM scraper "
-      "(Step 8) only scans page 1 (0x0-0x%05X) - this is the known blind spot "
-      "from the README. Low counts here likely mean page-2 tables are still "
-      "unlabeled." % (PAGE2_START, ROM_END, page2_symbol_count, MUT_OFFSET))
-
-# ──────────────────────────────────────────────────────────────────
-print("")
 print("=" * 60)
-print("H8/539F Master Setup complete!")
+print("H8/539F Master Setup (ROM + auto-analysis) complete!")
+print("Next: run h8539_import_tables_xml.py to apply EcuFlash XML labels")
+print("and the ROM scraper against this now-analyzed program.")
 print("=" * 60)

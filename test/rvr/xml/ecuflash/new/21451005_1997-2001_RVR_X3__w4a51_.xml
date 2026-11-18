@@ -1,0 +1,542 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rom>
+  <!-- Exported from Ghidra project: RVR_1998_x3 w4a51 21451005 md352554.hex -->
+  <!-- Source: currently-labeled tables (XML-imported + scraper-found) -->
+  <table name="ECUID Logger" address="10208" type="1D" category="Identification" scaling="Hex16" level="4" />
+  <table name="Software Version" address="1020A" type="2D" category="Identification" scaling="Hex8" level="4" />
+  <table name="Case Part Number" address="10218" type="3D" category="Identification" scaling="Hex8" level="4" />
+  <table name="TABLE_2D_00010859" address="10859" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="SCALING_TABLE_000108AA" address="108AA" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF3A4 -->
+    <!-- In ptr: RAM:0xF38C -->
+  </table>
+  <table name="SCALING_TABLE_000108B8" address="108B8" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF3A6 -->
+    <!-- In ptr: RAM:0xF396 -->
+  </table>
+  <table name="TABLE_3D_000108CF" address="108CF" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_00010A29" address="10A29" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_00010A45" address="10A45" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_00010A61" address="10A61" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="SCALING_TABLE_00010CB6" address="10CB6" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF3A8 -->
+    <!-- In ptr: RAM:0xF38C -->
+  </table>
+  <table name="SCALING_TABLE_00010CC4" address="10CC4" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF3AA -->
+    <!-- In ptr: RAM:0xF396 -->
+  </table>
+  <table name="TABLE_2D_000112A4" address="112A4" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011354" address="11354" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011360" address="11360" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001137E" address="1137E" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001139C" address="1139C" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000113BA" address="113BA" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000113D8" address="113D8" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000113F6" address="113F6" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011414" address="11414" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011440" address="11440" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001146C" address="1146C" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011498" address="11498" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000114AC" address="114AC" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011650" address="11650" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011674" address="11674" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000116C8" address="116C8" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000116D8" address="116D8" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011704" address="11704" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011718" address="11718" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001172C" address="1172C" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011740" address="11740" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011754" address="11754" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011768" address="11768" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001177C" address="1177C" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011790" address="11790" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000117A4" address="117A4" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000117B8" address="117B8" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000117CC" address="117CC" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000117E0" address="117E0" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000117F4" address="117F4" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011808" address="11808" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001181C" address="1181C" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011830" address="11830" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011844" address="11844" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011858" address="11858" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001186C" address="1186C" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011880" address="11880" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011894" address="11894" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000118A8" address="118A8" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000118BC" address="118BC" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000118D0" address="118D0" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000118E4" address="118E4" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000118F8" address="118F8" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="SCALING_TABLE_00011908" address="11908" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF000 -->
+    <!-- In ptr: RAM:0xF6D8 -->
+  </table>
+  <table name="TABLE_2D_0001198C" address="1198C" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000119B0" address="119B0" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_00011A1B" address="11A1B" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_00011B21" address="11B21" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="Shift Pressure: 1 -&gt; 2" address="11BFE" type="2D" category="Auto Shift Pressure" scaling="ShiftPressure" level="3" />
+  <table name="Shift Pressure: 2 -&gt; 3" address="11C12" type="2D" category="Auto Shift Pressure" scaling="ShiftPressure" level="3" />
+  <table name="Shift Pressure: 3 -&gt; 4" address="11C26" type="2D" category="Auto Shift Pressure" scaling="ShiftPressure" level="3" />
+  <table name="Shift Pressure: 4 -&gt; 5" address="11C3A" type="2D" category="Auto Shift Pressure" scaling="ShiftPressure" level="3" />
+  <table name="Shift Time: 1 -&gt; 2" address="11C4E" type="2D" category="Auto Shift Time" scaling="ShiftTime" level="3" />
+  <table name="Shift Time: 2 -&gt; 3" address="11C62" type="2D" category="Auto Shift Time" scaling="ShiftTime" level="3" />
+  <table name="Shift Time: 3 -&gt; 4" address="11C76" type="2D" category="Auto Shift Time" scaling="ShiftTime" level="3" />
+  <table name="Shift Time: 4 -&gt; 5" address="11C8A" type="2D" category="Auto Shift Time" scaling="ShiftTime" level="3" />
+  <table name="Shift Pressure: 2 -&gt; 1" address="11C9E" type="2D" category="Auto Shift Pressure" scaling="ShiftPressure" level="3" />
+  <table name="Shift Pressure: 3 -&gt; 2" address="11CB2" type="2D" category="Auto Shift Pressure" scaling="ShiftPressure" level="3" />
+  <table name="Shift Pressure: 4 -&gt; 3" address="11CC6" type="2D" category="Auto Shift Pressure" scaling="ShiftPressure" level="3" />
+  <table name="Shift Pressure: 5 -&gt; 4" address="11CDA" type="2D" category="Auto Shift Pressure" scaling="ShiftPressure" level="3" />
+  <table name="TABLE_2D_00011CEE" address="11CEE" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="Auto: 1 -&gt; 2" address="11D08" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="Auto: 2 -&gt; 1" address="11D2C" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="Auto: 2 -&gt; 3" address="11D50" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="Auto: 3 -&gt; 2" address="11D74" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="Auto: 3 -&gt; 4" address="11D98" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="Auto: 4 -&gt; 3" address="11DBC" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="Auto: 4 -&gt; 5" address="11DE0" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="Auto: 5 -&gt; 4" address="11E04" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="unknown shift table 8 possible L -&gt; H (untested)" address="11E28" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="unknown shift table 4 possible H -&gt; L (untested)" address="11E4C" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="unknown shift table 7 possible L -&gt; H (untested)" address="11E70" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="unknown shift table 3 possible H -&gt; L (untested)" address="11E94" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="unknown shift table 6 possible L -&gt; H (untested)" address="11EB8" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="unknown shift table 2 possible H -&gt; L (untested)" address="11EDC" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="unknown shift table 5 possible L -&gt; H (untested)" address="11F00" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="unknown shift table 1 possible H -&gt; L (untested)" address="11F24" type="2D" category="Auto Shift Points" scaling="VehicleSpeedAT" level="3" />
+  <table name="TABLE_2D_00011F48" address="11F48" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011F6C" address="11F6C" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00011FF4" address="11FF4" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00012018" address="12018" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001203C" address="1203C" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00012064" address="12064" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_000120C9" address="120C9" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_000120E5" address="120E5" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_00012101" address="12101" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_0001211D" address="1211D" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="SCALING_TABLE_00012140" address="12140" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF5F0 -->
+    <!-- In ptr: RAM:0xF5EE -->
+  </table>
+  <table name="TABLE_2D_0001216C" address="1216C" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="SCALING_TABLE_0001217E" address="1217E" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF652 -->
+    <!-- In ptr: RAM:0xF50C -->
+  </table>
+  <table name="TABLE_2D_000121A8" address="121A8" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000121BC" address="121BC" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000121D0" address="121D0" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000121E4" address="121E4" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_000121FB" address="121FB" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="SCALING_TABLE_00012314" address="12314" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF698 -->
+    <!-- In ptr: RAM:0xF076 -->
+  </table>
+  <table name="TABLE_2D_00012326" address="12326" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="SCALING_TABLE_00012330" address="12330" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF69A -->
+    <!-- In ptr: RAM:0xF396 -->
+  </table>
+  <table name="TABLE_3D_00012345" address="12345" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_0001235D" address="1235D" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="SCALING_TABLE_0001236E" address="1236E" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF69C -->
+    <!-- In ptr: RAM:0xF396 -->
+  </table>
+  <table name="TABLE_3D_00012383" address="12383" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_0001239B" address="1239B" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="SCALING_TABLE_000123AC" address="123AC" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF69E -->
+    <!-- In ptr: RAM:0xF396 -->
+  </table>
+  <table name="TABLE_3D_000123C1" address="123C1" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_000123D9" address="123D9" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="SCALING_TABLE_000123EA" address="123EA" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF6A0 -->
+    <!-- In ptr: RAM:0xF396 -->
+  </table>
+  <table name="TABLE_3D_000123FF" address="123FF" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_00012417" address="12417" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_0001242F" address="1242F" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_00012447" address="12447" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="SCALING_TABLE_0001245C" address="1245C" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF6A8 -->
+    <!-- In ptr: RAM:0xF096 -->
+  </table>
+  <table name="TABLE_2D_00012486" address="12486" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000124A4" address="124A4" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000124B0" address="124B0" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00012508" address="12508" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001251A" address="1251A" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="SCALING_TABLE_000125A0" address="125A0" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF3AC -->
+    <!-- In ptr: RAM:0xF38C -->
+  </table>
+  <table name="SCALING_TABLE_000125AE" address="125AE" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF3AE -->
+    <!-- In ptr: RAM:0xF396 -->
+  </table>
+  <table name="SCALING_TABLE_000125BE" address="125BE" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF3B0 -->
+    <!-- In ptr: RAM:0xF38C -->
+  </table>
+  <table name="SCALING_TABLE_000125CC" address="125CC" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF3B2 -->
+    <!-- In ptr: RAM:0xF396 -->
+  </table>
+  <table name="TABLE_3D_000125E3" address="125E3" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_000125FF" address="125FF" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_0001261B" address="1261B" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_00012637" address="12637" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_00012653" address="12653" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_3D_0001266F" address="1266F" type="3D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000126E2" address="126E2" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00012706" address="12706" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001272E" address="1272E" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001274C" address="1274C" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001276A" address="1276A" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00012788" address="12788" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000127A6" address="127A6" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000127C4" address="127C4" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000127E2" address="127E2" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00012800" address="12800" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001281E" address="1281E" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001283C" address="1283C" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001285A" address="1285A" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00012878" address="12878" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000128C0" address="128C0" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00012910" address="12910" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00012934" address="12934" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_0001295C" address="1295C" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00012984" address="12984" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000129AA" address="129AA" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000129CE" address="129CE" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_000129FC" address="129FC" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="SCALING_TABLE_00017E78" address="17E78" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF39A -->
+    <!-- In ptr: RAM:0xF937 -->
+  </table>
+  <table name="SCALING_TABLE_000188E7" address="188E7" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF39A -->
+    <!-- In ptr: RAM:0xF937 -->
+  </table>
+  <table name="SCALING_TABLE_00018BF0" address="18BF0" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF216 -->
+    <!-- In ptr: RAM:0xF237 -->
+  </table>
+  <table name="TABLE_2D_000194D8" address="194D8" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00019AB9" address="19AB9" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="TABLE_2D_00019B1E" address="19B1E" type="2D">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+  </table>
+  <table name="SCALING_TABLE_0001E233" address="1E233" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF1D4 -->
+    <!-- In ptr: RAM:0xFA37 -->
+  </table>
+  <table name="UNCONFIRMED - Throttle/Load Axis B (candidate)" address="208AA" type="1D" category="Lock-up Control (unconfirmed)" scaling="RPM" level="5" />
+  <table name="UNCONFIRMED - Throttle/Load Axis A (candidate)" address="208B8" type="1D" category="Lock-up Control (unconfirmed)" scaling="uint16" level="5" />
+  <table name="SCALING_TABLE_00020D92" address="20D92" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF00A -->
+    <!-- In ptr: RAM:0xF836 -->
+  </table>
+  <table name="UNCONFIRMED - Vehicle Speed Axis (candidate)" address="21908" type="1D" category="Auto Shift Points (unconfirmed)" scaling="uint8" level="5" />
+  <table name="SCALING_TABLE_000220D9" address="220D9" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF58A -->
+    <!-- In ptr: RAM:0xF237 -->
+  </table>
+  <table name="UNCONFIRMED - Lock-up Engagement RPM Axis (candidate)" address="22314" type="1D" category="Lock-up Control (unconfirmed)" scaling="RPM" level="5" />
+  <table name="UNCONFIRMED - Large table A (candidate, dimensions unknown)" address="224A0" type="2D" category="Miscellaneous (unconfirmed)" scaling="uint8" level="5" />
+  <table name="UNCONFIRMED - Lock-up Engagement RPM Axis #2 (candidate)" address="224A8" type="1D" category="Lock-up Control (unconfirmed)" scaling="RPM" level="5" />
+  <table name="SCALING_TABLE_00023FCD" address="23FCD" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF1CA -->
+    <!-- In ptr: RAM:0xF637 -->
+  </table>
+  <table name="SCALING_TABLE_0002403F" address="2403F" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF1CA -->
+    <!-- In ptr: RAM:0xFB37 -->
+  </table>
+  <table name="SCALING_TABLE_000241DE" address="241DE" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF216 -->
+    <!-- In ptr: RAM:0xF536 -->
+  </table>
+  <table name="SCALING_TABLE_00024876" address="24876" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF6EC -->
+    <!-- In ptr: RAM:0xF637 -->
+  </table>
+  <table name="SCALING_TABLE_000254BD" address="254BD" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF1D0 -->
+    <!-- In ptr: RAM:0xF237 -->
+  </table>
+  <table name="SCALING_TABLE_0002CCA4" address="2CCA4" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF218 -->
+    <!-- In ptr: RAM:0xF737 -->
+  </table>
+  <table name="SCALING_TABLE_0002CE37" address="2CE37" type="Scaling">
+    <!-- scraper-derived: no EcuFlash category/scaling metadata available -->
+    <!-- Out ptr: RAM:0xF218 -->
+    <!-- In ptr: RAM:0xF637 -->
+  </table>
+  <table name="MUT Table" address="2FCD0" type="3D" category="MUT" scaling="Hex16" level="4" />
+  <table name="ECUID" address="2FEFA" type="2D" category="Identification" scaling="ASCII" level="4" />
+</rom>

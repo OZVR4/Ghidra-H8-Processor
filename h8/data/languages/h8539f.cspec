@@ -12,7 +12,7 @@
     </size_alignment_map>
   </data_organization>
 
-  <funcptr align="2" />
+  <funcptr align="1" />
 
   <global><range space="ram" first="0x00010000" last="0x0002FFFF"/></global>
 
@@ -56,8 +56,47 @@
 
   <returnaddress><varnode space="stack" offset="0x0" size="2"/></returnaddress>
 
+  <!-- 2026-11-06 (session 32): stackshift="0" on EVERY prototype. The H8 analyzers store the whole pop of the return instruction as the function purge (prts 4, rts 2, rte 6), which already contains the return address; the decompiler computes a callee extrapop as purge + stackshift, so any stackshift above 0 counts the return address twice and raises the tracked SP by stackshift per call (the uStackNNNN = return address stores). Verified on the RVR copy: 353 call sites with such stores became 0 (see review32.md). The two experiment copies of __stdcall_ns (stackshift 0 and 2 variants), which were identical to __stdcall_ns after this change, were removed on 2026-11-11. -->
   <default_proto>
-    <prototype name="__stdcall" extrapop="2" stackshift="2">
+    <!-- FIXED 2026-07-21: was extrapop="2" (bare 2-byte "rts" return). Root cause:
+         nearly every function in this ISA returns via "prts" (page return, pops
+         CP word + PC word = 4 bytes total), and any function with no explicit
+         calling-convention assignment falls back to THIS block (confirmed via
+         decompiler debug dump: <protoeval> names this block by its
+         <prototype name=...> value); so leaving this at 2 meant EVERY
+         untyped/indirectly-called far function silently mis-tracked SP by 2 bytes
+         per call. This was the root cause of the "register0xNN = (BADSPACEBASE
+         *)..." decompiler symptom seen across many functions
+         (increment_counters_in_range, decrement_counters_in_range,
+         table_lookup_interp, swap_invert_high_byte, clamp_u16, and almost
+         certainly others not yet surfaced).
+
+         UPDATED 2026-07-21 (same day, follow-up): first attempt hardcoded this to
+         extrapop="4", justified by a raw byte-frequency check for
+         opcode_special=0x19 (bare "rts") showing no spike above the random-byte
+         baseline. That check was methodologically unsound; prts is ITSELF
+         encoded as opcode_special=0x11 followed by opcode_special=0x19, so every
+         prts in the ROM also contributes a 0x19 hit to that count, and the check
+         never excluded them. Re-run properly: of 856 total 0x19 byte hits, 682 are
+         accounted for as the second byte of an 0x11,0x19 prts pair, leaving 174
+         unexplained (spot checks suggest these mostly sit in data/table regions,
+         not real code, but this was never exhaustively verified against actual
+         function/xref boundaries).
+
+         Rather than re-litigate that byte count, switched extrapop to "unknown"
+         instead of a hardcoded number. Per Ghidra's own cspec docs (and precedent
+         in x86win.cspec's __stdcall model), extrapop="unknown" tells the
+         decompiler to derive the real per-function stack cleanup from that
+         function's own return instruction/pcode, rather than assuming one fixed
+         value for every untyped function. This makes the whole rts-vs-prts
+         byte-frequency question moot for calling-convention purposes: a function
+         that genuinely ends in bare rts will correctly resolve to extrapop=2, and
+         one ending in prts will correctly resolve to 4, purely from what's
+         actually decompiled at that address. Only functions Ghidra can't reach a
+         real return for (indirect/computed-call targets, e.g. the still-open
+         0x28b2f jump-table issue) fall back to a guess; a much smaller, already-
+         tracked problem than guessing for every function. -->
+    <prototype name="__stdcall" extrapop="unknown" stackshift="0">
       <input>
         <pentry minsize="1" maxsize="2">
           <register name="R0"/>
@@ -72,6 +111,32 @@
           <addr offset="4" space="stack"/>
         </pentry>
       </input>
+      <!-- ATTEMPTED 2026-07-24, REVERTED same day: tried adding a tight 1-byte
+           pentry (<register name="R0:1"/>) ahead of the existing R0 pentry to
+           fix the item 15 CONCAT11 regression (a bare "minsize=1 maxsize=2"
+           output pentry lets Ghidra bind ANY return size in [1,2] to the full
+           2-byte R0 register, so byte-sized bool/undefined1 returns still
+           reserve R0's high byte, padded as a synthetic extraout_var and
+           rendered as CONCAT11(extraout_var, realByte) at every call site,
+           confirmed via live disassembly + decompile on
+           egr_activity_condition_check/egr_f0e6_bit1_update; changing the C
+           return type alone had zero effect, so the pentry sizing is the real
+           cause). REVERTED because "R0:1" is not valid Ghidra pentry register
+           syntax, it threw CompilerSpecNotFoundException /
+           "Unknown pentry register: R0:1" on load (XmlParseException in
+           AddressXML.restoreXml), since Ghidra <register> entries must name an
+           actual defined register, and h8539f.slaspec defines no byte-sized
+           sub-register of R0 (R0 is only ever a single 2-byte register at
+           offset 0x00, see the R0:R1 pairing that was itself tried and
+           reverted 2026-07-22 for related reasons, same area). Back to the
+           original single-pentry form below. The root-cause diagnosis above
+           still stands as a confirmed, real finding, only this specific fix
+           attempt was invalid syntax. Next attempt should look for Ghidra's
+           actual supported mechanism for a narrower-than-register return
+           (per-prototype size hints, extension attributes, or a real
+           byte-sized register definition added to h8539f.slaspec first) rather
+           than a colon-suffixed register name, which does not exist in this
+           schema. -->
       <output>
         <pentry minsize="1" maxsize="2">
           <register name="R0"/>
@@ -93,8 +158,216 @@
     </prototype>
   </default_proto>
 
-  <!-- PRTS is a page return: pops CP word (2 bytes) then PC word (2 bytes) = 4 bytes total -->
-  <prototype name="__stdcall_far" extrapop="2" stackshift="2">
+  <!-- PRTS is a page return: pops CP word (2 bytes) then PC word (2 bytes) = 4 bytes total.
+       NOTE 2026-07-21: default_proto above now also uses extrapop="unknown" (see its
+       comment for the full history; superseded a hardcoded extrapop="4" that was
+       itself only a same-day fix for the original extrapop="2" bug). Switched THIS
+       named convention to "unknown" too, for the same reason: the 5 functions
+       explicitly assigned calling_convention="__stdcall_far" today
+       (increment_counters_in_range, decrement_counters_in_range, table_lookup_interp,
+       swap_invert_high_byte, clamp_u16) are believed to return via prts, but letting
+       Ghidra derive that from each function's actual return instruction is strictly
+       more correct than continuing to hardcode it, and costs nothing since these are
+       all directly-decompiled, non-indirect functions where the analysis can actually
+       run. Kept as a separate named prototype (rather than deleting it and relying on
+       default_proto alone) so these 5 explicit assignments stay valid without needing
+       to be reverted. -->
+  <!-- ADDED 2026-07-22: some prts/pjsr-returning leaf functions (e.g. sat_add_u16,
+       confirmed via disassembly of its computed-call sites such as
+       isc_f462_position_ramp @0x184a5) pass ALL arguments on the stack with no
+       register pre-binding at all  unlike __stdcall_far, which reserves the
+       first parameter for R0. Caller pushes each arg via "mov Rn,@-SP" (Rn used
+       only as staging, not as an ABI register) then cleans up its own pushed
+       bytes with an explicit "adds.b N,SP" after the call (caller-cleanup,
+       cdecl-style), while the callee's own extrapop=4 only accounts for the
+       prts return address it pops itself. Reuses the same stack offset=4
+       convention as __stdcall_far, which is what correctly reconstructs the
+       FP+6 addressing seen in this function's own prologue once linked. -->
+  <!-- ADDED 2026-07-22: some prts/pjsr-returning, all-stack-param math helpers
+       (sat_add_s16, sat_sub_u16_clamp0, muldiv_u16_scaled, muldiv_s16_rounded_3op,
+       div_u32_u16_rounded, select_min_xy_triple) genuinely return a 32-bit value
+       across the R0:R1 register pair on every path (confirmed via disassembly:
+       both registers explicitly set in both the normal and saturated/overflow
+       branches, not just R1-as-scratch). __stdcall_far_allstack's single 2-byte
+       R0 <output> pentry can't express this: declaring these as "ushort" silently
+       drops the R1 half (decompiler warnings + broken parameter binding observed
+       on muldiv_u16_scaled), and declaring them as "uint" against the 2-byte
+       pentry made Ghidra fall back to a bogus hidden-return-pointer convention
+       (__return_storage_ptr__) that doesn't match this hardware at all. This
+       variant instead joins R0:R1 into one real 4-byte output location, matching
+       the actual register-pair return mechanism.
+       BUG FIXED 2026-07-22: initial version used the illegal tag join a="R0"
+       b="R1"; Ghidra's schema only allows addr/register inside a pentry.
+       Corrected to addr space="join" piece1="R0" piece2="R1" - but that
+       required two throwaway solo R0/R1 pentries to satisfy Ghidra's
+       "join must overlap a previous entry" rule, and those solo entries
+       turned out to pollute the decompiler's GLOBAL return-value candidate
+       model: after installing, ~18 unrelated functions across the ROM (ISRs,
+       axis_lookup_interp, sci1_boot_build_data_frame, etc - none of which
+       call any of the affected math helpers) started showing "Unable to
+       track spacebase fully for stack" / "Restarted to delay deadcode
+       elimination for space: register", confirmed via diffing full pre/post
+       decompile dumps (test/RVR_1998_x3 4g63t 21000011 md352553.hex.c vs
+       _math_fix.hex.c): 0 such warnings before, 27 after, spread across 18
+       functions with no call relationship to the 6 changed functions.
+       REPLACED 2026-07-22 with a genuine overlapping register R0R1 (see
+       h8539f.slaspec, offset=0x00 size=4, same AX/AL-style overlap technique
+       as any normal register alias) instead of the join/solo-pentry
+       workaround. A real register can't pollute the global return-value
+       model the way solo join-support pentries did, since it isn't a special
+       construct - it's declared in the language's register space like any
+       other register.
+       REVERTED 2026-07-22 (same-day follow-up): confirmed via a genuine full
+       Ghidra restart + fresh ROM reopen that R0R1 does NOT avoid the
+       pollution either. isr_sci1_eri and muldiv_u16_scaled both still showed
+       the exact same warnings/messy output as the join+solo-pentry version,
+       byte-for-byte identical before/after the restart and before/after an
+       explicit set_function_prototype re-application on muldiv_u16_scaled.
+       So a real overlapping register in the register space can still
+       perturb the decompiler's global return-value/stack-tracking model
+       just by existing. R0R1 has been removed from h8539f.slaspec entirely.
+       Falling back to a plain 2-byte ushort R0 output pentry here (matching
+       __stdcall_far_allstack) accepts the known dropped-R1-half warning
+       on just the 6 math helpers, a smaller and already-understood problem
+       that does not spread to unrelated functions. Backup of the R0R1 state
+       is in backup_20260722_pre_r0r1_revert/ if this needs re-diagnosing. -->
+  <prototype name="__stdcall_far_allstack_32ret" extrapop="4" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="512" align="2">
+        <addr offset="4" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+      <register name="R1"/>
+      <register name="R2"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    </unaffected>
+  </prototype>
+
+  <prototype name="__stdcall_far_allstack" extrapop="4" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="512" align="2">
+        <addr offset="4" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+      <register name="R1"/>
+      <register name="R2"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    </unaffected>
+  </prototype>
+
+  <!-- ADDED 2026-07-30: table_lookup_interp needs TWO distinct all-stack params
+       (a 1-byte EP-bank value at FP+7, a 2-byte struct pointer at FP+8), confirmed
+       via disassembly (ldc.b @(0x7:8,FP),EP then mov:f.w @(0x8:8,FP),R4, both
+       genuinely consumed as separate values, not one blob). Neither __stdcall_far
+       (reserves R0 for a single param, wrong, this is a far pjsr call with no
+       register pre-binding, same all-stack shape as __stdcall_far_allstack) nor
+       __stdcall_far_allstack itself (single collapsed pentry can't bind two
+       differently-sized params separately) fit. This variant splits the all-stack
+       region into two explicit pentries at stack offset 4 (byte) and offset 5
+       (word), mirroring the FP+7/FP+8 gap seen in the real prologue once the
+       3-byte extrapop/stackshift base (matching __stdcall_far_allstack's offset=4
+       start) is accounted for. NOT YET TESTED against a live prototype
+       application/reanalyze, verify table_lookup_interp's 130 call sites
+       decompile with clean literal arguments before relying on this. -->
+  <!-- CORRECTED 2026-07-30: real exported prototype state (table_lookup_interp.xml
+       save-state export) showed Ghidra resolving this function's actual extrapop
+       as 6, not the 4 first assumed by analogy with __stdcall_far_allstack. Only
+       ep_val (offset 4) bound; the pointer param stayed unassigned with the old
+       offset-5 pentry, consistent with the base being off by the same 2-byte gap
+       between extrapop=4 and the true extrapop=6. Shifted both pentries +2
+       (offset 4 to 6 wide, mirroring the real 1-byte-then-word run at FP+7/FP+8)
+       and locked extrapop=6 explicitly so Ghidra stops re-deriving a different
+       value. NOT YET VERIFIED against a live rebind, check
+       get_function_variables shows both params with real Stack[] storage before
+       trusting this. -->
+  <!-- UPDATE 2026-07-30: get_function_variables DOES show both pentries bound
+       (ep_val Stack[0x6]:1, table Stack[0x7]:2, no <UNASSIGNED>), confirmed
+       live and durable across recompile/reinstall/reload. BUT the decompiled
+       function body still ignores this binding entirely: reads a raw
+       stack0xfffe+7 byte into a stray uVar1 that's never used, then builds its
+       real working pointer from garbage (uVar8, an uninitialized undefined3),
+       identical to the pre-fix decompile. TESTING 2026-07-30 (second attempt,
+       different from the already-rejected align=2-at-offset-7 attempt above):
+       pentry 2 moved to offset=8 (even, so align=2 is no longer self-
+       contradictory the way it was at the odd offset=7) to test whether the
+       decompiler's own stack-frame numbering is off-by-one from the pentry
+       declaration's numbering. Pentry 1 left unchanged at offset=6 since it
+       already binds correctly. NOT YET VERIFIED, re-check
+       get_function_variables AND force_decompile's actual body (not just the
+       signature) before trusting this; revert immediately if either the
+       pointer parameter goes back to <UNASSIGNED> or if ep_val's binding
+       regresses. -->
+  <!-- REVERTED 2026-07-30, same day: tested via set_function_prototype +
+       get_function_variables, table came back <UNASSIGNED> at offset=8/align=2,
+       same failure as the original. However this test's validity is itself in
+       question: a live compiler-spec parse exception (CompilerSpecNotFoundException,
+       the double-hyphen-in-comments XML rule violation, caused by a stray bare
+       double-hyphen in one of this file's own comment blocks, now fixed) occurred around
+       this same edit, meaning the test may have run against a degraded/stale
+       compiler-spec state rather than a clean reload of this file. Reverted to
+       offset=7/no-align (the last state independently confirmed working via a
+       direct custom-storage override, not via this calling convention's own
+       pentry resolution) as the safe known-good baseline. Needs a full Ghidra
+       restart, not just ReloadSleighLanguage.java, before any further pentry-
+       offset experiments on this prototype are trustworthy. -->
+  <prototype name="__stdcall_far_2arg" extrapop="6" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="1">
+        <addr offset="6" space="stack"/>
+      </pentry>
+      <pentry minsize="2" maxsize="2">
+        <addr offset="7" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+      <register name="R1"/>
+      <register name="R2"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    </unaffected>
+  </prototype>
+
+  <prototype name="__stdcall_far" extrapop="4" stackshift="0">
     <input>
       <pentry minsize="1" maxsize="2">
         <register name="R0"/>
@@ -121,6 +394,578 @@
       <register name="SP"/>
       <register name="SP24"/>
     </unaffected>
+  </prototype>
+
+  <!-- 2026-10-30: R1/R2-preserving clones of each calling convention above, named <convention>_pR1, _pR2 and _pR1R2.
+       Each is identical to its base convention except that the named register(s) move from killedbycall to
+       unaffected. They are assigned per function by H8PreservedRegsAnalyzer (disabled by default; see
+       h8/data/src/main/java/h8539f/H8PreservedRegsAnalyzer.java) to functions that save the register at entry
+       and restore it before every return (stm/ldm or mov push/pop), so callers keep R1/R2 across the call
+       instead of printing extraout_R1/extraout_R2. Unused clones are harmless. -->
+  <prototype name="__stdcall_pR1" extrapop="unknown" stackshift="0">
+      <input>
+        <pentry minsize="1" maxsize="2">
+          <register name="R0"/>
+        </pentry>
+        <pentry minsize="1" maxsize="2">
+          <register name="R1"/>
+        </pentry>
+        <pentry minsize="1" maxsize="2">
+          <register name="R2"/>
+        </pentry>
+        <pentry minsize="1" maxsize="512" align="2">
+          <addr offset="4" space="stack"/>
+        </pentry>
+      </input>
+      <output>
+        <pentry minsize="1" maxsize="2">
+          <register name="R0"/>
+        </pentry>
+      </output>
+      <killedbycall>
+        <register name="R0"/>
+        <register name="R2"/>
+      </killedbycall>
+      <unaffected>
+        <register name="R3"/>
+        <register name="R4"/>
+        <register name="R5"/>
+        <register name="FP"/>
+        <register name="SP"/>
+        <register name="SP24"/>
+      
+        <register name="R1"/>
+      </unaffected>
+    </prototype>
+  <prototype name="__stdcall_pR2" extrapop="unknown" stackshift="0">
+      <input>
+        <pentry minsize="1" maxsize="2">
+          <register name="R0"/>
+        </pentry>
+        <pentry minsize="1" maxsize="2">
+          <register name="R1"/>
+        </pentry>
+        <pentry minsize="1" maxsize="2">
+          <register name="R2"/>
+        </pentry>
+        <pentry minsize="1" maxsize="512" align="2">
+          <addr offset="4" space="stack"/>
+        </pentry>
+      </input>
+      <output>
+        <pentry minsize="1" maxsize="2">
+          <register name="R0"/>
+        </pentry>
+      </output>
+      <killedbycall>
+        <register name="R0"/>
+        <register name="R1"/>
+      </killedbycall>
+      <unaffected>
+        <register name="R3"/>
+        <register name="R4"/>
+        <register name="R5"/>
+        <register name="FP"/>
+        <register name="SP"/>
+        <register name="SP24"/>
+      
+        <register name="R2"/>
+      </unaffected>
+    </prototype>
+  <prototype name="__stdcall_pR1R2" extrapop="unknown" stackshift="0">
+      <input>
+        <pentry minsize="1" maxsize="2">
+          <register name="R0"/>
+        </pentry>
+        <pentry minsize="1" maxsize="2">
+          <register name="R1"/>
+        </pentry>
+        <pentry minsize="1" maxsize="2">
+          <register name="R2"/>
+        </pentry>
+        <pentry minsize="1" maxsize="512" align="2">
+          <addr offset="4" space="stack"/>
+        </pentry>
+      </input>
+      <output>
+        <pentry minsize="1" maxsize="2">
+          <register name="R0"/>
+        </pentry>
+      </output>
+      <killedbycall>
+        <register name="R0"/>
+      </killedbycall>
+      <unaffected>
+        <register name="R3"/>
+        <register name="R4"/>
+        <register name="R5"/>
+        <register name="FP"/>
+        <register name="SP"/>
+        <register name="SP24"/>
+      
+        <register name="R1"/>
+        <register name="R2"/>
+      </unaffected>
+    </prototype>
+  <!-- 2026-11-02: no-stack variants of __stdcall and its three R1/R2 clones (__stdcall_ns, _ns_pR1, _ns_pR2, _ns_pR1R2).
+       Identical to the matching __stdcall prototype except that the stack input entry (up to 512 bytes at offset 4)
+       is missing. H8PreservedRegsAnalyzer assigns them ("No-stack mode", off by default) to functions that provably
+       read no stack parameter (H8StackReadTracker). Without it the decompiler assumes stack arguments for every call
+       and, when the caller pushed none, reads a stale value from that slot (often an earlier call's pushed return
+       address) and prints it as a call argument. Unused variants are harmless. -->
+  <prototype name="__stdcall_ns" extrapop="unknown" stackshift="0">
+      <input>
+        <pentry minsize="1" maxsize="2">
+          <register name="R0"/>
+        </pentry>
+        <pentry minsize="1" maxsize="2">
+          <register name="R1"/>
+        </pentry>
+        <pentry minsize="1" maxsize="2">
+          <register name="R2"/>
+        </pentry>
+      </input>
+      <output>
+        <pentry minsize="1" maxsize="2">
+          <register name="R0"/>
+        </pentry>
+      </output>
+      <killedbycall>
+        <register name="R0"/>
+        <register name="R1"/>
+        <register name="R2"/>
+      </killedbycall>
+      <unaffected>
+        <register name="R3"/>
+        <register name="R4"/>
+        <register name="R5"/>
+        <register name="FP"/>
+        <register name="SP"/>
+        <register name="SP24"/>
+      </unaffected>
+    </prototype>
+  <prototype name="__stdcall_ns_pR1" extrapop="unknown" stackshift="0">
+      <input>
+        <pentry minsize="1" maxsize="2">
+          <register name="R0"/>
+        </pentry>
+        <pentry minsize="1" maxsize="2">
+          <register name="R1"/>
+        </pentry>
+        <pentry minsize="1" maxsize="2">
+          <register name="R2"/>
+        </pentry>
+      </input>
+      <output>
+        <pentry minsize="1" maxsize="2">
+          <register name="R0"/>
+        </pentry>
+      </output>
+      <killedbycall>
+        <register name="R0"/>
+        <register name="R2"/>
+      </killedbycall>
+      <unaffected>
+        <register name="R3"/>
+        <register name="R4"/>
+        <register name="R5"/>
+        <register name="FP"/>
+        <register name="SP"/>
+        <register name="SP24"/>
+        <register name="R1"/>
+      </unaffected>
+    </prototype>
+  <prototype name="__stdcall_ns_pR2" extrapop="unknown" stackshift="0">
+      <input>
+        <pentry minsize="1" maxsize="2">
+          <register name="R0"/>
+        </pentry>
+        <pentry minsize="1" maxsize="2">
+          <register name="R1"/>
+        </pentry>
+        <pentry minsize="1" maxsize="2">
+          <register name="R2"/>
+        </pentry>
+      </input>
+      <output>
+        <pentry minsize="1" maxsize="2">
+          <register name="R0"/>
+        </pentry>
+      </output>
+      <killedbycall>
+        <register name="R0"/>
+        <register name="R1"/>
+      </killedbycall>
+      <unaffected>
+        <register name="R3"/>
+        <register name="R4"/>
+        <register name="R5"/>
+        <register name="FP"/>
+        <register name="SP"/>
+        <register name="SP24"/>
+        <register name="R2"/>
+      </unaffected>
+    </prototype>
+  <prototype name="__stdcall_ns_pR1R2" extrapop="unknown" stackshift="0">
+      <input>
+        <pentry minsize="1" maxsize="2">
+          <register name="R0"/>
+        </pentry>
+        <pentry minsize="1" maxsize="2">
+          <register name="R1"/>
+        </pentry>
+        <pentry minsize="1" maxsize="2">
+          <register name="R2"/>
+        </pentry>
+      </input>
+      <output>
+        <pentry minsize="1" maxsize="2">
+          <register name="R0"/>
+        </pentry>
+      </output>
+      <killedbycall>
+        <register name="R0"/>
+      </killedbycall>
+      <unaffected>
+        <register name="R3"/>
+        <register name="R4"/>
+        <register name="R5"/>
+        <register name="FP"/>
+        <register name="SP"/>
+        <register name="SP24"/>
+        <register name="R1"/>
+        <register name="R2"/>
+      </unaffected>
+    </prototype>
+  <prototype name="__stdcall_far_allstack_pR1" extrapop="4" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="512" align="2">
+        <addr offset="4" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+      <register name="R2"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    
+        <register name="R1"/>
+      </unaffected>
+  </prototype>
+  <prototype name="__stdcall_far_allstack_pR2" extrapop="4" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="512" align="2">
+        <addr offset="4" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+      <register name="R1"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    
+        <register name="R2"/>
+      </unaffected>
+  </prototype>
+  <prototype name="__stdcall_far_allstack_pR1R2" extrapop="4" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="512" align="2">
+        <addr offset="4" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    
+        <register name="R1"/>
+        <register name="R2"/>
+      </unaffected>
+  </prototype>
+  <prototype name="__stdcall_far_pR1" extrapop="4" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+      <pentry minsize="1" maxsize="512" align="2">
+        <addr offset="4" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+      <register name="R2"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    
+        <register name="R1"/>
+      </unaffected>
+  </prototype>
+  <prototype name="__stdcall_far_pR2" extrapop="4" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+      <pentry minsize="1" maxsize="512" align="2">
+        <addr offset="4" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+      <register name="R1"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    
+        <register name="R2"/>
+      </unaffected>
+  </prototype>
+  <prototype name="__stdcall_far_pR1R2" extrapop="4" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+      <pentry minsize="1" maxsize="512" align="2">
+        <addr offset="4" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    
+        <register name="R1"/>
+        <register name="R2"/>
+      </unaffected>
+  </prototype>
+  <prototype name="__stdcall_far_allstack_32ret_pR1" extrapop="4" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="512" align="2">
+        <addr offset="4" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+      <register name="R2"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    
+        <register name="R1"/>
+      </unaffected>
+  </prototype>
+  <prototype name="__stdcall_far_allstack_32ret_pR2" extrapop="4" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="512" align="2">
+        <addr offset="4" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+      <register name="R1"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    
+        <register name="R2"/>
+      </unaffected>
+  </prototype>
+  <prototype name="__stdcall_far_allstack_32ret_pR1R2" extrapop="4" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="512" align="2">
+        <addr offset="4" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    
+        <register name="R1"/>
+        <register name="R2"/>
+      </unaffected>
+  </prototype>
+  <prototype name="__stdcall_far_2arg_pR1" extrapop="6" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="1">
+        <addr offset="6" space="stack"/>
+      </pentry>
+      <pentry minsize="2" maxsize="2">
+        <addr offset="7" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+      <register name="R2"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    
+        <register name="R1"/>
+      </unaffected>
+  </prototype>
+  <prototype name="__stdcall_far_2arg_pR2" extrapop="6" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="1">
+        <addr offset="6" space="stack"/>
+      </pentry>
+      <pentry minsize="2" maxsize="2">
+        <addr offset="7" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+      <register name="R1"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    
+        <register name="R2"/>
+      </unaffected>
+  </prototype>
+  <prototype name="__stdcall_far_2arg_pR1R2" extrapop="6" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="1">
+        <addr offset="6" space="stack"/>
+      </pentry>
+      <pentry minsize="2" maxsize="2">
+        <addr offset="7" space="stack"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="2">
+        <register name="R0"/>
+      </pentry>
+    </output>
+    <killedbycall>
+      <register name="R0"/>
+    </killedbycall>
+    <unaffected>
+      <register name="R3"/>
+      <register name="R4"/>
+      <register name="R5"/>
+      <register name="FP"/>
+      <register name="SP"/>
+      <register name="SP24"/>
+    
+        <register name="R1"/>
+        <register name="R2"/>
+      </unaffected>
   </prototype>
 
 </compiler_spec>
